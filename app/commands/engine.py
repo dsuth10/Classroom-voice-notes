@@ -22,20 +22,30 @@ class VoskCommandEngine(CommandEngine):
 
     def accept_chunk(self, chunk: np.ndarray) -> str | None:
         chunk_bytes = chunk.tobytes()
-        self.rec.AcceptWaveform(chunk_bytes)
         
-        # Check partial results for instant command execution
+        # Check final result if a segment/silence boundary is reached
+        if self.rec.AcceptWaveform(chunk_bytes):
+            result_json = self.rec.Result()
+            try:
+                result_data = json.loads(result_json)
+                text = result_data.get("text", "").strip()
+                words = text.split()
+                if len(words) == 1 and words[0] in self.keywords:
+                    return words[0]
+            except Exception:
+                pass
+        
+        # Check partial result but ONLY execute command if it's the sole word detected
+        # to prevent false-triggers from phonetically similar words in normal sentences
         partial_json = self.rec.PartialResult()
         try:
             partial_data = json.loads(partial_json)
             partial_text = partial_data.get("partial", "").strip()
-            
-            words: list[str] = partial_text.split()
-            for word in words:
-                if word in self.keywords:
-                    # Reset the recogniser to prevent double-firing in subsequent frames
-                    self.rec.Reset()
-                    return word
+            words = partial_text.split()
+            if len(words) == 1 and words[0] in self.keywords:
+                # Reset recogniser to avoid double trigger
+                self.rec.Reset()
+                return words[0]
         except Exception:
             pass
             
