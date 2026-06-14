@@ -1,0 +1,83 @@
+[project]
+name = "classroom-voice-notes"
+version = "0.1.0"
+description = "Local wake-phrase note taking, transcription, and routing system"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.6.0",
+    "sounddevice>=0.4.6",
+    "httpx>=0.25.0",
+    "pvporcupine>=3.0.0",
+    "python-dotenv>=1.0.0",
+    "openwakeword>=0.6.0",
+    "vosk>=0.3.45",
+    "onnxruntime>=1.16.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-qt>=4.2.0",
+    "pytest-asyncio>=0.21.0",
+    "mypy>=1.5.0",
+    "black>=23.7.0",
+]
+
+[tool.mypy]
+strict = true
+exclude = ["tests"]
+ignore_missing_imports = true
+warn_unused_configs = true
+disallow_any_generics = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.ruff]
+exclude = [
+    ".agent",
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".venv",
+]
+
+[tool.ruff.lint]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402", "F841", "F401"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.17",
+]
+
+
+

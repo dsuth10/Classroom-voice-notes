@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+/* 
+  Lesson Creator Slide Template
+  Dimensions: 720pt x 405pt (16:9)
+  
+  CRITICAL RULE: 
+  DO NOT stack multiple slides in this file. 
+  The html2pptx script requires exactly ONE HTML file per slide.
+*/
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #f9f7f7; /* Off White */
+  font-family: Arial, sans-serif;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header Section */
+.header {
+  background: #112d4e; /* Deep Navy */
+  padding: 15pt 40pt;
+  display: flex;
+  align-items: center;
+}
+h1 { 
+  color: #f96d00; /* Vibrant Orange */
+  font-size: 36pt; 
+  margin: 0; 
+  font-weight: bold;
+}
+
+/* Content Area */
+.content {
+  flex: 1;
+  padding: 20pt 40pt;
+  display: flex;
+  flex-direction: column;
+  gap: 15pt;
+}
+
+/* Components */
+.box {
+  background: #3f72af; /* Soft Blue */
+  padding: 15pt;
+  border-radius: 15pt;
+  color: white;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+p {
+  color: #112d4e;
+  font-size: 20pt;
+  margin: 0;
+  line-height: 1.4;
+}
+.box p { color: #ffffff; }
+
+/* Horizontal Split Layout */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 30pt;
+}
+
+/* Emphasis */
+.highlight {
+  color: #f96d00;
+  font-weight: bold;
+}
+
+/* Footer / Safety Margin */
+.footer {
+  height: 48pt; /* 0.5" safety margin */
+  background: transparent;
+}
+</style>
+</head>
+<body>
+  <!-- Edit content below -->
+  <div class="header">
+    <h1>Slide Title</h1>
+  </div>
+  
+  <div class="content">
+    <div class="box">
+      <p>This is a <span class="highlight">Vibrant Orange</span> highlight inside a Soft Blue box.</p>
+    </div>
+    
+    <div class="grid">
+      <div>
+        <p>Column 1 content goes here. Use short, punchy sentences.</p>
+      </div>
+      <div>
+        <p>Column 2 content. Perfect for comparisons or images.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer"></div>
+</body>
+</html>

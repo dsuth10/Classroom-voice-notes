@@ -1,0 +1,8 @@
+[project]
+name = "excalidraw-diagram"
+version = "0.1.0"
+description = "Excalidraw diagram rendering skill"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.40.0",
+]

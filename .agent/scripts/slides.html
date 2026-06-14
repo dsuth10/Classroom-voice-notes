@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+/* 
+Theme: Forest & Growth 
+Primary: #1E5128
+Secondary: #4E9F3D
+Background: #F4F6F6
+*/
+body {
+  width: 720pt; 
+  height: 405pt; 
+  margin: 0; 
+  padding: 0;
+  background: #F4F6F6; 
+  font-family: Arial, sans-serif;
+  display: flex; 
+  flex-direction: column;
+}
+
+/* Common slide structure */
+.slide { 
+  width: 720pt; 
+  height: 405pt; 
+  box-sizing: border-box; 
+  display: flex; 
+  flex-direction: column;
+}
+
+/* Dark green title band */
+.title-band {
+  background: #1E5128;
+  height: 70pt;
+  padding-left: 30pt;
+  padding-right: 30pt;
+  padding-top: 15pt;
+  box-sizing: border-box;
+}
+
+.title-band h1 {
+  color: #FFFFFF;
+  font-size: 32pt;
+  margin: 0;
+}
+
+/* Light background container for content */
+.content-box {
+  background: #FFFFFF;
+  border-top: 6pt solid #4E9F3D;
+  height: 335pt; /* 405 - 70 */
+  padding: 30pt;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+.h2-container {
+  border-bottom: 2pt solid #4E9F3D;
+  margin-bottom: 15pt;
+  padding-bottom: 5pt;
+}
+
+h2 {
+  color: #1E5128;
+  font-size: 26pt;
+  margin: 0;
+}
+
+p {
+  color: #333333;
+  font-size: 20pt;
+  line-height: 1.4;
+  margin-top: 5pt;
+  margin-bottom: 10pt;
+}
+
+ul {
+  font-size: 20pt;
+  color: #333333;
+  margin-top: 5pt;
+  margin-bottom: 5pt;
+}
+
+ol {
+  font-size: 20pt;
+  color: #333333;
+  margin-top: 5pt;
+  margin-bottom: 5pt;
+}
+
+li {
+  margin-bottom: 10pt;
+}
+
+/* Title Slide specifics */
+.title-wrap {
+  background: #1E5128;
+  border: 4pt solid #4E9F3D;
+  margin: 40pt;
+  height: 325pt;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+.main-title {
+  color: #FFFFFF;
+  font-size: 44pt;
+  text-align: center;
+  margin-bottom: 15pt;
+  margin-top: 80pt;
+}
+
+.subtitle {
+  color: #F4F6F6;
+  font-size: 24pt;
+  text-align: center;
+}
+
+.highlight {
+  color: #1E5128;
+  font-weight: bold;
+}
+
+</style>
+</head>
+<body>
+
+<!-- Slide 1: Title -->
+<div class="slide">
+  <div class="title-wrap">
+    <h1 class="main-title">Plant Germination Experiment</h1>
+    <p class="subtitle">Investigating how different conditions affect seed growth</p>
+  </div>
+</div>
+
+<!-- Slide 2: The Question -->
+<div class="slide">
+  <div class="title-band">
+    <h1>1. Start with a Question</h1>
+  </div>
+  <div class="content-box">
+    <div class="h2-container">
+      <h2>What do we want to find out?</h2>
+    </div>
+    <p>Good scientists always start their investigations with a clear <span style="font-weight: bold; color: #1E5128;">inquiry question</span>.</p>
+    <p>Your question should tell us exactly what you are investigating.</p>
+    <ul>
+      <li><span style="font-weight: bold; color: #4E9F3D;">Example:</span> "How does the amount of sunlight affect germination?"</li>
+      <li><span style="font-weight: bold; color: #4E9F3D;">Example:</span> "Will a seed germinate faster in soil or cotton wool?"</li>
+    </ul>
+  </div>
+</div>
+
+<!-- Slide 3: The Hypothesis -->
+<div class="slide">
+  <div class="title-band">
+    <h1>2. Make a Hypothesis</h1>
+  </div>
+  <div class="content-box">
+    <div class="h2-container">
+      <h2>What is a Hypothesis?</h2>
+    </div>
+    <p>A hypothesis is your <span style="font-weight: bold; color: #1E5128;">prediction</span> of what will happen in the experiment.</p>
+    <p>We write it as: <span style="font-style: italic;">"I think that... because..."</span></p>
+    <ul>
+      <li><span style="font-weight: bold; color: #4E9F3D;">Example:</span> "I think that the seed in the sunlight will germinate faster <span style="font-weight: bold;">because</span> plants need sunlight for energy."</li>
+    </ul>
+    <p>It's okay if your hypothesis is wrong! That's how we learn.</p>
+  </div>
+</div>
+
+<!-- Slide 4: Variables/Fair Testing -->
+<div class="slide">
+  <div class="title-band">
+    <h1>3. Planning a Fair Test</h1>
+  </div>
+  <div class="content-box">
+    <div class="h2-container">
+      <h2>Why do we need a Fair Test?</h2>
+    </div>
+    <p>To know exactly what caused a change, we must make sure our experiment is <span style="font-weight: bold; color: #1E5128;">fair</span>.</p>
+    <ul>
+      <li><span style="font-weight: bold;">CHANGE</span> only <span style="font-weight: bold; color: #1E5128;">ONE thing</span> (e.g., amount of water).</li>
+      <li><span style="font-weight: bold;">MEASURE</span> ONE thing (e.g., how tall the plant grows).</li>
+      <li><span style="font-weight: bold;">KEEP THE SAME</span> everything else! (e.g., same seed, same cup, same dirt).</li>
+    </ul>
+  </div>
+</div>
+
+<!-- Slide 5: The Setup Visual -->
+<div class="slide">
+  <div class="title-band">
+    <h1>Our Setup</h1>
+  </div>
+  <div class="content-box" style="display: flex; flex-direction: row;">
+    <div style="flex: 1; margin-right: 20pt;">
+      <div class="h2-container">
+        <h2>What you will need:</h2>
+      </div>
+      <ul style="margin-bottom: 0;">
+        <li style="font-size: 18pt; margin-bottom: 5pt;">A growing container (like a cup)</li>
+        <li style="font-size: 18pt; margin-bottom: 5pt;">Your chosen growing medium (soil, etc.)</li>
+        <li style="font-size: 18pt; margin-bottom: 5pt;">Your seeds</li>
+        <li style="font-size: 18pt; margin-bottom: 5pt;">Water</li>
+        <li style="font-size: 18pt; margin-bottom: 0;">Your student planner document</li>
+      </ul>
+      <p style="margin-top: 5pt; margin-bottom: 0; font-size: 14pt; font-style: italic;">We will set these up after planning your procedure.</p>
+    </div>
+    <div style="flex: 1;">
+        <div id="cupPlaceholder" class="placeholder" style="width: 200pt; height: 180pt; margin-top: 20pt; margin-left: 40pt;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 6: Procedure -->
+<div class="slide">
+  <div class="title-band">
+    <h1>4. Write the Procedure</h1>
+  </div>
+  <div class="content-box">
+    <div class="h2-container">
+      <h2>Step-by-Step Instructions</h2>
+    </div>
+    <p>Your procedure is the list of instructions for your experiment. It must be very clear!</p>
+    <ol>
+      <li>Use numbered steps (1, 2, 3...)</li>
+      <li>Start each step with an action word (Put, Pour, Measure, Add)</li>
+      <li>Include specific amounts (e.g., "Pour 50mL of water")</li>
+    </ol>
+    <p style="font-weight: bold; color: #4E9F3D; text-align: center; margin-top: 0pt;">Time to write your plans in your Student Planner!</p>
+  </div>
+</div>
+
+</body>
+</html>

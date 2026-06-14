@@ -1,0 +1,21 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Local Environment Keys (DO NOT COMMIT)
+.env
+
+# Application config / logs
+settings.json
+audit.log
+*.wav
+*.txt
