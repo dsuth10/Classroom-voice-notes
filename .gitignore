@@ -23,3 +23,10 @@ audit.log
 # Whisper models
 bin/whisper/ggml-*.bin
 
+# Generated Obsidian Notes
+Obsidian/Joshua Note Exchange/Classroom Voice Notes/
+**/.obsidian/workspace.json
+**/workspace.json.bak
+
+
+

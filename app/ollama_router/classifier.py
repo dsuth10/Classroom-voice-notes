@@ -32,7 +32,7 @@ class OllamaClassifier:
                 "format": "json"
             }
             
-            response = httpx.post(f"{self.url}/api/generate", json=payload, timeout=10.0)
+            response = httpx.post(f"{self.url}/api/generate", json=payload, timeout=30.0)
             if response.status_code != 200:
                 raise RuntimeError(f"Ollama server returned status code: {response.status_code}")
                 
