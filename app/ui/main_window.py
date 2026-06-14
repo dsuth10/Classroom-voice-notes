@@ -92,6 +92,72 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(sys_group)
 
         # ----------------------------------------------------
+        # Group 1.5: Audio Hardware Settings
+        # ----------------------------------------------------
+        audio_group = QGroupBox("Audio Input Configuration")
+        audio_layout = QVBoxLayout(audio_group)
+        audio_layout.setSpacing(8)
+        
+        # Dropdown for input devices
+        device_layout = QHBoxLayout()
+        audio_layout.addLayout(device_layout)
+        device_layout.addWidget(QLabel("Input Device:"))
+        self.device_combo = QComboBox()
+        device_layout.addWidget(self.device_combo)
+        
+        # Audio level progress bar
+        level_layout = QHBoxLayout()
+        audio_layout.addLayout(level_layout)
+        level_layout.addWidget(QLabel("Audio Level:"))
+        from PySide6.QtWidgets import QProgressBar
+        self.level_bar = QProgressBar()
+        self.level_bar.setRange(0, 100)
+        self.level_bar.setValue(0)
+        self.level_bar.setTextVisible(False)
+        self.level_bar.setFixedHeight(12)
+        level_layout.addWidget(self.level_bar)
+        
+        main_layout.addWidget(audio_group)
+
+        # Query sound devices and populate dropdown
+        import sounddevice as sd
+        try:
+            devices = sd.query_devices()
+            input_devices = []
+            for i, dev in enumerate(devices):
+                if dev.get('max_input_channels', 0) > 0:
+                    input_devices.append((i, dev))
+        except Exception:
+            input_devices = []
+
+        current_idx = self.settings_manager.get("audio.device_index")
+        self.device_mapping: list[Any] = []
+        
+        self.device_combo.addItem("System Default Input", None)
+        self.device_mapping.append(None)
+        
+        selected_dropdown_idx = 0
+        for idx, dev in input_devices:
+            name = dev.get('name', f"Device {idx}")
+            host_api = dev.get('hostapi', 0)
+            try:
+                api_name = sd.query_hostapis(host_api).get('name', '')
+            except Exception:
+                api_name = ''
+            label = f"{idx}: {name} ({api_name})" if api_name else f"{idx}: {name}"
+            
+            self.device_combo.addItem(label, idx)
+            self.device_mapping.append(idx)
+            
+            if current_idx is not None and int(current_idx) == idx:
+                selected_dropdown_idx = len(self.device_mapping) - 1
+                
+        self.device_combo.setCurrentIndex(selected_dropdown_idx)
+
+        if self.controller:
+            self.controller.audio_level_updated.connect(self.update_audio_level)
+
+        # ----------------------------------------------------
         # Group 2: Wake-Word Activation (openWakeWord)
         # ----------------------------------------------------
         wake_group = QGroupBox("Wake-Word Activation (openWakeWord)")
@@ -198,6 +264,10 @@ class MainWindow(QMainWindow):
         if dir_path:
             self.cmd_model_edit.setText(dir_path)
 
+    def update_audio_level(self, peak_value: float) -> None:
+        val = int((peak_value / 32768.0) * 100)
+        self.level_bar.setValue(val)
+
     def save_all(self) -> None:
         vault_path = self.vault_edit.text().strip()
         limit_sec = self.limit_spin.value()
@@ -269,10 +339,16 @@ class MainWindow(QMainWindow):
         self.settings_manager.set("spoken_commands.model_path", cmd_model)
         self.settings_manager.set("spoken_commands.grammar_keywords", cmd_keywords)
 
+        # Save Audio Device Index
+        selected_idx = self.device_combo.currentIndex()
+        if selected_idx >= 0 and selected_idx < len(self.device_mapping):
+            dev_idx = self.device_mapping[selected_idx]
+            self.settings_manager.set("audio.device_index", dev_idx)
+
         if self.controller:
             try:
                 self.controller.reload_settings()
-            except Exception as e:
+            except Exception:
                 import traceback
                 QMessageBox.critical(self, "Reload Error", f"Failed to reload settings:\n{traceback.format_exc()}")
                 return

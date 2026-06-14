@@ -19,3 +19,7 @@ settings.json
 audit.log
 *.wav
 *.txt
+
+# Whisper models
+bin/whisper/ggml-*.bin
+

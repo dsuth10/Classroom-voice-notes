@@ -44,7 +44,8 @@ def test_wakeword_worker_emits_signal(qapp) -> None:
         mock_model.predict.side_effect = [{"joshua_note": 0.1}, {"joshua_note": 0.9}]
         mock_model_cls.return_value = mock_model
         
-        worker = WakeWordWorker("dummy_path.onnx", phrase="Joshua note", threshold=0.5)
+        engine = OpenWakeWordEngine("dummy_path.onnx", threshold=0.5)
+        worker = WakeWordWorker(engine, phrase="Joshua note", threshold=0.5)
         
         detected_events = []
         errors = []

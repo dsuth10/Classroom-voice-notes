@@ -2,6 +2,7 @@ import asyncio
 import os
 from pathlib import Path
 from app.audit.audit_logger import log_audit_event
+from app.utils.downloader import download_whisper_model
 
 class WhisperTranscriber:
     def __init__(self, bin_path: str, model_path: str) -> None:
@@ -14,7 +15,13 @@ class WhisperTranscriber:
         
         if not Path(self.bin_path).exists():
             raise FileNotFoundError(f"whisper.cpp binary not found at: {self.bin_path}")
-        if not Path(self.model_path).exists():
+            
+        model_p = Path(self.model_path)
+        if not model_p.exists():
+            # Run the synchronous download function in a separate thread to prevent blocking the event loop / GUI
+            await asyncio.to_thread(download_whisper_model, model_p)
+            
+        if not model_p.exists():
             raise FileNotFoundError(f"whisper.cpp model not found at: {self.model_path}")
             
         # whisper.cpp by default creates an output text file named <wav_path>.txt when using -otxt

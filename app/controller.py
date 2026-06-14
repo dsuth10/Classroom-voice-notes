@@ -13,6 +13,7 @@ class AppController(QObject):
     error_occurred = Signal(str)
     note_saved = Signal(str)
     pipeline_finished = Signal(str)
+    audio_level_updated = Signal(float)
 
     def __init__(self, settings_manager: SettingsManager) -> None:
         super().__init__()
@@ -20,6 +21,7 @@ class AppController(QObject):
         self.state = "IDLE_LISTENING"
         
         self.audio_input_manager = AudioInputManager(self.settings_manager)
+        self.audio_input_manager.level_callback = self._on_audio_level
         self.audio_input_manager.start()
         
         self.recorder_worker: Any = None
@@ -228,9 +230,23 @@ class AppController(QObject):
         self.elapsed_seconds += 1.0
         self.recording_time_updated.emit(self.elapsed_seconds)
 
+    def _on_audio_level(self, peak_value: float) -> None:
+        self.audio_level_updated.emit(peak_value)
+
     def reload_settings(self) -> None:
         """Reloads settings and restarts the wake word worker if listening."""
         log_audit_event("SETTINGS_RELOADED", "controller", "Reloading settings from manager")
+
+        # Restart AudioInputManager to apply any new device_index configuration
+        self.audio_input_manager.stop()
+        
+        self.audio_input_manager.sample_rate = self.settings_manager.get("audio.sample_rate") or 16000
+        self.audio_input_manager.channels = self.settings_manager.get("audio.channels") or 1
+        self.audio_input_manager.chunk_size = self.settings_manager.get("audio.chunk_size") or 1280
+        device_idx = self.settings_manager.get("audio.device_index")
+        self.audio_input_manager.device_index = int(device_idx) if device_idx is not None else None
+        
+        self.audio_input_manager.start()
 
         if self.state == "IDLE_LISTENING":
             self._stop_wake_word_worker()

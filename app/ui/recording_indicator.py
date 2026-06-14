@@ -1,3 +1,4 @@
+from typing import Any
 from PySide6.QtCore import Qt, QPoint, QTimer, Signal
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame, QMenu
 from PySide6.QtGui import QMouseEvent
@@ -120,7 +121,7 @@ class RecordingIndicator(QWidget):
             self.open_settings_requested.emit()
             event.accept()
 
-    def contextMenuEvent(self, event) -> None:
+    def contextMenuEvent(self, event: Any) -> None:
         menu = QMenu(self)
         settings_action = menu.addAction("Open Settings")
         menu.addSeparator()

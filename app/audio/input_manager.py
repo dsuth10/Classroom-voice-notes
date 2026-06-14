@@ -14,6 +14,10 @@ class AudioInputManager:
         self.channels = self.settings_manager.get("audio.channels") or 1
         self.chunk_size = self.settings_manager.get("audio.chunk_size") or 1280
         pre_roll_seconds = self.settings_manager.get("audio.pre_roll_seconds") or 1.5
+        device_idx = self.settings_manager.get("audio.device_index")
+        self.device_index = int(device_idx) if device_idx is not None else None
+        from typing import Callable, Optional
+        self.level_callback: Optional[Callable[[float], None]] = None
         
         self.max_pre_roll_bytes = int(pre_roll_seconds * self.sample_rate * 2)
         
@@ -36,6 +40,7 @@ class AudioInputManager:
         try:
             # sounddevice InputStream starts a background C thread for audio capture
             self.stream = sd.InputStream(
+                device=self.device_index,
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype=np.int16,
@@ -86,6 +91,13 @@ class AudioInputManager:
             return
             
         chunk_bytes = indata.tobytes()
+        
+        if self.level_callback and len(indata) > 0:
+            try:
+                peak = np.max(np.abs(indata))
+                self.level_callback(float(peak))
+            except Exception:
+                pass
         
         with self.pre_roll_lock:
             self.pre_roll_buffer.extend(chunk_bytes)

@@ -1,8 +1,7 @@
 import queue
-from typing import Optional
 from PySide6.QtCore import QThread, Signal
 import numpy as np
-from app.wakeword.engine import OpenWakeWordEngine, ManualOnlyEngine, WakeEngine
+from app.wakeword.engine import WakeEngine
 from app.audit.audit_logger import log_audit_event
 
 class WakeWordWorker(QThread):

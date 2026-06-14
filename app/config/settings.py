@@ -44,6 +44,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "channels": 1,
         "chunk_size": 1280,
         "pre_roll_seconds": 1.5,
+        "device_index": None,
     },
     "recording": {
         "hard_cap_seconds": 60,
