@@ -23,11 +23,12 @@ def settings_manager(tmp_path) -> SettingsManager:
 
 @pytest.fixture(autouse=True)
 def mock_audio_components():
-    """Autouse fixture to mock AudioInputManager, RecorderWorker, WakeWordWorker, and VoskCommandWorker."""
+    """Autouse fixture to mock AudioInputManager, RecorderWorker, WakeWordWorker, VoskCommandWorker, and PipelineWorker."""
     with mock.patch("app.controller.AudioInputManager") as mock_input_manager_cls, \
          mock.patch("app.audio.worker.RecorderWorker") as mock_recorder_worker_cls, \
          mock.patch("app.wakeword.worker.WakeWordWorker") as mock_wakeword_worker_cls, \
-         mock.patch("app.commands.worker.VoskCommandWorker") as mock_command_worker_cls:
+         mock.patch("app.commands.worker.VoskCommandWorker") as mock_command_worker_cls, \
+         mock.patch("app.controller.PipelineWorker") as mock_pipeline_worker_cls:
         
         mock_input = mock.MagicMock()
         mock_input.sample_rate = 16000
@@ -47,7 +48,10 @@ def mock_audio_components():
         mock_cmd_worker = mock.MagicMock()
         mock_command_worker_cls.return_value = mock_cmd_worker
         
-        yield mock_input, mock_worker, mock_wake_worker, mock_cmd_worker
+        mock_pipeline_worker = mock.MagicMock()
+        mock_pipeline_worker_cls.return_value = mock_pipeline_worker
+        
+        yield mock_input, mock_worker, mock_wake_worker, mock_cmd_worker, mock_pipeline_worker
 
 def test_controller_initial_state(qapp, settings_manager) -> None:
     controller = AppController(settings_manager)
@@ -56,7 +60,8 @@ def test_controller_initial_state(qapp, settings_manager) -> None:
 
 def test_controller_recording_transitions(qapp, settings_manager, mock_audio_components) -> None:
     controller = AppController(settings_manager)
-    mock_input, mock_worker, mock_wake_worker, mock_cmd_worker = mock_audio_components
+    mock_audio = mock_audio_components
+    mock_input, mock_worker, mock_wake_worker, mock_cmd_worker, mock_pipeline = mock_audio
     
     states = []
     controller.state_changed.connect(states.append)
@@ -75,15 +80,19 @@ def test_controller_recording_transitions(qapp, settings_manager, mock_audio_com
     assert mock_input.unsubscribe.called
     assert mock_worker.stop_recording.called
     
-    # Simulate worker finishing compilation
-    # Connect a slot to check if state transitions to IDLE_LISTENING after finished
+    # Simulate worker finishing recording and starting the pipeline
     controller._on_recording_finished("dummy.wav")
+    assert controller.state == "TRANSCRIBING"
+    assert mock_pipeline.start.called
+    
+    # Simulate pipeline completing successfully
+    controller._on_pipeline_finished("dummy_note.md")
     assert controller.state == "IDLE_LISTENING"
     assert controller.recorder_worker is None
 
 def test_controller_cancel_recording(qapp, settings_manager, mock_audio_components) -> None:
     controller = AppController(settings_manager)
-    mock_input, mock_worker, mock_wake_worker, mock_cmd_worker = mock_audio_components
+    mock_input, mock_worker, mock_wake_worker, mock_cmd_worker, _ = mock_audio_components
     
     controller.start_recording()
     assert controller.state == "RECORDING"
@@ -102,7 +111,7 @@ def test_controller_cancel_recording(qapp, settings_manager, mock_audio_componen
 
 def test_controller_recording_timeout(qapp, settings_manager, mock_audio_components) -> None:
     controller = AppController(settings_manager)
-    mock_input, mock_worker, mock_wake_worker, mock_cmd_worker = mock_audio_components
+    mock_input, mock_worker, mock_wake_worker, mock_cmd_worker, _ = mock_audio_components
     controller.start_recording()
     
     limit_reached_called = False
@@ -118,7 +127,7 @@ def test_controller_recording_timeout(qapp, settings_manager, mock_audio_compone
 
 def test_controller_reload_settings(qapp, settings_manager, mock_audio_components) -> None:
     controller = AppController(settings_manager)
-    mock_input, mock_worker, mock_wake_worker, mock_cmd_worker = mock_audio_components
+    mock_input, mock_worker, mock_wake_worker, mock_cmd_worker, _ = mock_audio_components
     
     # We should have started the wake word worker on init if it's enabled
     assert controller.wakeword_worker is not None

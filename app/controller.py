@@ -5,6 +5,7 @@ from app.config.settings import SettingsManager
 from app.audit.audit_logger import log_audit_event
 
 from app.audio.input_manager import AudioInputManager
+from app.transcription.worker import PipelineWorker
 
 class AppController(QObject):
     state_changed = Signal(str)
@@ -27,6 +28,7 @@ class AppController(QObject):
         self.recorder_worker: Any = None
         self.wakeword_worker: Any = None
         self.command_worker: Any = None
+        self.pipeline_worker: Any = None
         
         self._is_cancelled = False
         
@@ -196,11 +198,28 @@ class AppController(QObject):
                 print(f"Failed to delete cancelled WAV: {e}")
             self.recorder_worker = None
             return
-            
-        self.note_saved.emit(wav_path)
+
+        self.set_state("TRANSCRIBING")
+        self.pipeline_worker = PipelineWorker(wav_path, self.settings_manager, self.elapsed_seconds)
+        self.pipeline_worker.state_changed.connect(self.set_state)
+        self.pipeline_worker.finished_pipeline.connect(self._on_pipeline_finished)
+        self.pipeline_worker.error_occurred.connect(self._on_pipeline_error)
+        self.pipeline_worker.start()
+        self.recorder_worker = None
+
+    def _on_pipeline_finished(self, note_path: str) -> None:
+        self.note_saved.emit(note_path)
+        self.pipeline_finished.emit(note_path)
         self.set_state("IDLE_LISTENING")
         self._start_wake_word_worker()
-        self.recorder_worker = None
+        self.pipeline_worker = None
+
+    def _on_pipeline_error(self, err_msg: str) -> None:
+        self.error_occurred.emit(err_msg)
+        self.set_state("ERROR")
+        self.set_state("IDLE_LISTENING")
+        self._start_wake_word_worker()
+        self.pipeline_worker = None
 
     def _on_recording_error(self, err_msg: str) -> None:
         self.error_occurred.emit(err_msg)
