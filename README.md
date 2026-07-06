@@ -1,62 +1,115 @@
 # Classroom Voice Notes
 
-**Classroom Voice Notes** is a local-first desktop application designed for teachers. It enables hands-free professional reflection, lesson observation capture, behaviour reflection, and quick workflow tasks using local wake-phrase detection, audio recording, local transcription (via `whisper.cpp`), and local LLM routing (via `Ollama`).
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Python: 3.9+](https://img.shields.io/badge/Python-3.9+-yellow.svg)](https://www.python.org/)
+[![Framework: PySide6](https://img.shields.io/badge/Framework-PySide6-green.svg)](https://wiki.qt.io/Qt_for_Python)
+[![Platform: Windows First](https://img.shields.io/badge/Platform-Windows%20First-lightgrey.svg)]()
+
+**Classroom Voice Notes** is a local-first, privacy-respecting desktop application designed for teachers. It enables hands-free lesson reflection, student observations, behaviour logs, reminders, and workflow automation. Using local wake-phrase detection, audio recording, local transcription (via `whisper.cpp`), and local LLM routing (via `Ollama`), teachers can document their classroom in real time without sacrificing student privacy.
 
 ---
 
 ## 📖 Product Philosophy & Positioning
-* **A hands-free teacher note-taking tool** for short professional reflections, observations, reminders, and workflow capture.
-* **Local-first by design:** Teacher observations and sensitive school records remain entirely offline.
-* **Privacy-preserving:** A strict policy gate ensures that student names, behaviour records, achievement logs, and welfare notes never leave the local machine.
+* **Hands-Free Classroom Integration:** Designed for busy classrooms. Teachers wear a wireless/lavalier microphone and dictate thoughts as they happen.
+* **Local-First & Offline Design:** Sensitive school records, student details, achievement logs, and behavioural observations remain strictly offline in a local Obsidian Vault.
+* **Strict Privacy Policy Gate:** A hard-coded, zero-trust policy gate acts as the final arbiter for external transmission. Student-sensitive details are completely blocked from external integrations, while non-sensitive instructions can route to external agents.
 
 ---
 
 ## 🏗️ System Architecture & Workflow
 
 ```text
-Teacher wears lavalier microphone
-        ↓
-App listens locally for wake phrase ("Joshua note")
-        ↓
-Teacher speaks a short note (max 60 seconds by default)
-        ↓
-Teacher speaks command ("Joshua save") or clicks Hotkey (Ctrl + Alt + S)
-        ↓
-App stops recording and transcribes audio locally via whisper.cpp
-        ↓
-Transcript is classified by a local Ollama model (e.g. qwen3.5:latest)
-        ↓
-Hard-coded Privacy Policy Gate evaluates sensitivity
-        ↓
-Note is saved locally to Obsidian vault in clean Markdown format
+       [Teacher Voice]
+              │
+              ▼
+   ┌──────────────────────────────────────────────┐
+   │ 1. Local Wake-Word Engine (openWakeWord)     │  <── Listens for "Joshua note"
+   └──────────────────────┬───────────────────────┘
+                          │ (Triggered)
+                          ▼
+   ┌──────────────────────────────────────────────┐
+   │ 2. Audio Capture & Spoken Command Recognition │  <── Listens for "save" / "cancel" via Vosk
+   └──────────────────────┬───────────────────────┘
+                          │ (Stopped & Saved)
+                          ▼
+   ┌──────────────────────────────────────────────┐
+   │ 3. Local Transcription (whisper.cpp)          │  <── High-speed C++ Whisper implementation
+   └──────────────────────┬───────────────────────┘
+                          │ (Raw text transcript)
+                          ▼
+   ┌──────────────────────────────────────────────┐
+   │ 4. Two-Pass LLM Router (Ollama - qwen3.5)    │  <── Generates title, category, metadata, tags
+   └──────────────────────┬───────────────────────┘
+                          │ (Classification Data)
+                          ▼
+   ┌──────────────────────────────────────────────┐
+   │ 5. Local Student Privacy Registry             │  <── Maps real names to IDs (e.g. STU-001)
+   └──────────────────────┬───────────────────────┘
+                          │ (Anonymised Metadata)
+                          ▼
+   ┌──────────────────────────────────────────────┐
+   │ 6. Hard-Coded Policy Gate Checks             │  <── Validates external transmission limits
+   └──────────┬────────────────────────┬──────────┘
+              │ (If Telegram Allowed)  │ (Local Save)
+              ▼                        ▼
+   ┌──────────────────────┐  ┌──────────────────────────────────────────────┐
+   │ Telegram Task        │  │ 7. Obsidian Vault Writer (note_templates)    │
+   │ Dispatcher           │  └──────────────────────────────────────────────┘
+   │ (Hermes/OpenClaw)    │     (Saves formatted Markdown files in: Inbox,  
+   └──────────────────────┘      Student Notes, Behaviour Notes, Maths, HASS...)
 ```
 
 ---
 
-## 🛠️ Main Features
-1. **Wake-Phrase Recognition:** Runs locally using `openWakeWord` to detect wake phrases like *"Joshua note"*.
-2. **Spoken Command Controls:** Built-in `Vosk` engine handles hands-free voice commands (*"save"*, *"stop"*, *"cancel"*, *"discard"*).
-3. **Manual Fallback Hotkeys:** Always-on keyboard shortcuts to override or assist in noisy classrooms:
-   * **Start Recording:** `Ctrl + Alt + N`
-   * **Stop and Save:** `Ctrl + Alt + S`
-   * **Cancel Recording:** `Ctrl + Alt + C`
-   * **Pause Listening:** `Ctrl + Alt + P`
-4. **Local Transcription (`whisper.cpp`):** High-speed local transcription using `whisper.cpp` binaries.
-5. **Automatic Model Bootstrapping:** If the `ggml-base.en.bin` Whisper model file is missing during first launch or transcription, it automatically downloads from Hugging Face without freezing the user interface.
-6. **Obsidian Vault Integration:** Categorises notes automatically with YAML frontmatter, saving them into dedicated folders:
-   * `Student Notes/` (achievement, support, wellbeing)
-   * `Behaviour Notes/` (observations and classroom management)
-   * `Maths Notes/` (misconceptions and teaching observations)
-   * `Reminders/` (time-sensitive reminders)
-   * `Email Drafts/` (comms drafts requiring review)
-   * `Agent Task Archive/` (archived external prompts)
-   * `Review Queue/` (uncertain or flagged logs)
-   * `Inbox/` (uncategorised general notes)
-7. **Privacy Policy Gate:** Evaluates LLM classifications and blocks any student-sensitive data from leaving the local machine. Only non-sensitive agent planning tasks may route to external channels like Telegram.
+## 🛠️ Feature Set
+
+### 1. Hands-Free Spoken Control & Manual Hotkeys
+* **Wake-Phrase Recognition:** Runs locally using `openWakeWord` to detect wake phrases like *"Joshua note"*.
+* **Spoken Command Controls:** Hands-free voice commands (*"save"*, *"stop"*, *"cancel"*, *"discard"*) managed via a lightweight, offline `Vosk` recognition thread.
+* **Manual Override Hotkeys:** Global system-wide hotkeys override or assist in noisy classrooms:
+  * **Start Recording:** `Ctrl + Alt + N`
+  * **Stop and Save:** `Ctrl + Alt + S`
+  * **Cancel Recording:** `Ctrl + Alt + C`
+  * **Pause/Resume Listening:** `Ctrl + Alt + P`
+
+### 2. High-Speed Local Transcription & Auto-Bootstrap
+* Uses high-performance `whisper.cpp` binaries running locally.
+* **Automatic Model Bootstrapping:** If the `ggml-base.en.bin` Whisper model file is missing during startup or transcription, it automatically downloads from Hugging Face asynchronously without freezing the user interface.
+
+### 3. Subject-Specific Note Templates
+Observations are generated using tailored Markdown templates with specific YAML metadata and bodies:
+* **Student Observations (`student_note`):** Tracks general academic observations and welfare.
+* **Behaviour Notes (`behaviour_note`):** Captures incident details (e.g., disruption type, action taken).
+* **Subject Notes (`maths_note`, `science_note`, `english_note`, `hass_note`, `digitech_note`, `designtech_note`):** Extracts Australian Curriculum v9 Strands, misconceptions, text types, investigation details, and year levels.
+* **Reminders (`reminder`):** Logs scheduled dates and priorities.
+* **Email Drafts (`email_draft`):** Prepares communication drafts for review.
+* **Agent Tasks (`agent_task`):** Standard task instructions targeting external developer agents.
+
+### 4. Privacy Registry & Name Anonymisation
+* **Local Student Registry (`student_registry.json`):** Tracks display names and maps them to unique IDs (e.g., `STU-001`). 
+* **Metadata Anonymisation:** Real student names are only kept in the local notes and registry; they are completely stripped from metadata frontmatter, ensuring zero leak risk if metadata is shared or synced. Unknown names are auto-registered locally to avoid data loss.
+
+### 5. Actionable Reminders & `.ics` Generation
+* **Reminder Engine:** Scans files on a periodic 30-second timer.
+* **Windows System Toast Alerts:** Sends native Windows notifications when a reminder is due.
+* **iCalendar Sync (`ics_writer`):** Automatically generates standard `.ics` files saved in `Classroom Voice Notes/Calendar/` for easy syncing with Outlook, Google Calendar, or open-source calendars.
+
+### 6. Review Queue & Life Cycle Management
+* If the LLM routing confidence is low, or if the note requires validation, it is saved to the `Review Queue/` directory.
+* **Review Manager:** Periodically scans the queue. If you edit a note and tick the review checkboxes (`- [x] Checked transcript`), the system automatically moves it out of the queue and into its appropriate directory. If a note remains unclassified, it utilizes a local `phi4:14b` model to perform a secondary reclassification.
+
+### 7. Multi-Agent Task Dispatcher
+* Integrates with external Telegram agents (**Hermes** for planning/instruction and **OpenClaw** for coding/analysis).
+* If a note is categorized as an `agent_task` and sensitivity is `non_sensitive` (validated by the Policy Gate), it compiles a structured task payload and dispatches it via the Telegram Bot API.
+
+### 8. Daily Summaries & Student Indexing
+* **Student Index (`Student Index.md`):** Automatically scans Obsidian notes, groups files under each student's display name, and compiles a comprehensive local index of observations.
+* **Daily Activity Summaries:** Generates `Summary_YYYY-MM-DD.md` listing files created today.
+* **Safe Telegram Digest:** Sends a message to the teacher's Telegram at the end of the day with pure count statistics (e.g., *"Daily Summary: 3 Maths Notes, 1 Behaviour Note"*), keeping all PII offline.
 
 ---
 
-## 📂 Project Structure
+## 📂 Project Directory Structure
 
 ```text
 Classroom voice notes/
@@ -65,7 +118,14 @@ Classroom voice notes/
 │   ├── audit/                  # Security audit logging engine
 │   ├── commands/               # Vosk spoken command recognition
 │   ├── config/                 # Application settings manager (settings.json)
-│   ├── destinations/           # Obsidian file writing and routing
+│   ├── destinations/           # Obsidian file writing, templates, index and daily summaries
+│   │   ├── daily_summary.py    # Daily activity aggregator
+│   │   ├── student_index.py    # Local student notes index compiler
+│   │   ├── note_templates.py   # Markdown subject rendering engine
+│   │   ├── reminder_engine.py  # Toast reminder worker
+│   │   └── telegram_dispatcher.py # Task dispatcher
+│   ├── privacy/                # Privacy and student database
+│   │   └── student_registry.py # Maps names to STU-xxx IDs
 │   ├── ollama_router/          # Ollama classifier & Policy Gate checks
 │   ├── transcription/          # whisper.cpp transcription manager
 │   ├── ui/                     # PySide6 MainWindow and Recording floating widget
@@ -87,41 +147,50 @@ Classroom voice notes/
 ## 🚀 Getting Started
 
 ### 1. Prerequisites
-Ensure you have the following installed on your machine:
-* Python 3.9+ (Windows-first application)
+Ensure you have the following installed on your Windows machine:
+* **Python 3.9+**
 * [Ollama](https://ollama.com/) (running locally)
 * [Obsidian](https://obsidian.md/) (for vault storage)
 
-### 2. Dependency Installation
-This project uses `uv` for package management. To install all dependencies, run:
+### 2. Installation
+This project uses `uv` for lightning-fast package management. Install dependencies:
 ```bash
 uv sync
 ```
 
-### 3. Local LLM Initialisation
-Pull the recommended routing and classification models:
+### 3. Local Model Setup
+Pull the recommended routing and reclassification models inside Ollama:
 ```bash
 ollama pull qwen3.5:latest
 ollama pull phi4:14b
 ```
 
 ### 4. Running the Application
-To launch the desktop application, run:
+To launch the application:
 ```bash
 uv run run.py
 ```
-On the first launch, you will be prompted to select your Obsidian vault path.
+* **First Launch:** A file picker will appear. Select your local Obsidian Vault directory.
+* **System Tray:** A glassmorphic widget will float on your screen, indicating current listening state ("Idle Listening", "Recording", "Transcribing"). Right-click it to access Settings, quit, or trigger summaries.
 
 ---
 
-## 🧪 Running Tests
-To execute the test suite (unit and integration tests), run:
+## 🧪 Testing
+The project includes a robust suite of unit and integration tests. To run them:
 ```bash
-uv run pytest
+uv run pytest tests/
 ```
-All tests are mocked to run safely without requiring external audio hardware or server calls.
+All audio capturing, LLM classification, and Telegram API connections are mocked, allowing tests to run cleanly offline.
 
 ---
 
-## 🛡️ Audit & Security
-All operations (state transitions, wake-word triggers, classification results, and privacy blocks) are written to a local `audit.log` file stored in your application data directory to ensure transparency.
+## 🛡️ Security, Privacy & Standards
+* **Australian Spelling & Metric System:** The application is written following Australian English spelling conventions (e.g., *behaviour*, *anonymise*, *organise*) and uses the metric system throughout.
+* **Data Locality:** Student achievements, behavioural logs, welfare records, absence reports, and medical information are hard-locked inside the local system.
+* **Policy Gate Rules:** Even if the LLM classifier authorizes external routing, the `PolicyGate` rejects transmission if the category is student-sensitive or if transcript keywords suggest personal details.
+* **Local Auditing:** All operations (such as classification outputs, state changes, policy block actions, and registry lookups) are written to local logs inside your user data directory (`C:\Users\<User>\.gemini\antigravity-ide\`).
+
+---
+
+## 📄 License
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
