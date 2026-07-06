@@ -1,6 +1,8 @@
 import asyncio
 import os
 import shutil
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 from PySide6.QtCore import QThread, Signal
@@ -15,6 +17,7 @@ class PipelineWorker(QThread):
     state_changed = Signal(str)      # Emits current stage: "CLASSIFYING", "POLICY_CHECKING", "ROUTING", "WRITING_OUTPUT"
     finished_pipeline = Signal(str)  # Emits the path of the saved Obsidian markdown note
     error_occurred = Signal(str)     # Emits error description if any step fails
+    reminder_captured = Signal(dict, str) # Emits classification_data and note_path
 
     def __init__(
         self,
@@ -40,68 +43,82 @@ class PipelineWorker(QThread):
             
             if not transcript:
                 transcript = "[Empty recording]"
+            
+            # Clean transcript
+            preambles = [r"hey joshua[,\.]?", r"joshua note[,\.]?", r"hey jarvis[,\.]?", r"joshua[,\.]?"]
+            for preamble in preambles:
+                transcript = re.sub(f"^{preamble}\\s*", "", transcript, flags=re.IGNORECASE)
+            
+            commands = [r"save$", r"saved$", r"cancel$", r"stop$", r"discard$"]
+            for cmd in commands:
+                transcript = re.sub(f"\\s*{cmd}[\\.\\!\\?]*$", "", transcript, flags=re.IGNORECASE)
+            
+            transcript = transcript.strip()
+            if transcript:
+                transcript = transcript[0].upper() + transcript[1:]
                 
             # 2. Classify transcript locally using Ollama
             self.state_changed.emit("CLASSIFYING")
             ollama_url = self.settings_manager.get("ollama_url")
-            fast_model = self.settings_manager.get("fast_model")
+            fast_model = self.settings_manager.get("fast_model", "qwen3.5:latest")
             classifier = OllamaClassifier(ollama_url, fast_model)
-            classification = classifier.classify(transcript)
+            
+            recorded_at = datetime.now().isoformat()
+            classification = classifier.classify(transcript, recorded_at, self.duration_seconds)
+            
+            confidence = classification.get("confidence", 0.5)
+            sensitivity = classification.get("sensitivity", "unknown")
+            
+            # Two-pass classification if low confidence or unknown sensitivity
+            if confidence < 0.75 or sensitivity == "unknown":
+                log_audit_event("CLASSIFICATION_RETRY", "session", "Low confidence or unknown sensitivity. Using careful model.")
+                careful_model = self.settings_manager.get("careful_model", "phi4:14b")
+                careful_classifier = OllamaClassifier(ollama_url, careful_model)
+                classification = careful_classifier.classify(transcript, recorded_at, self.duration_seconds)
+                sensitivity = classification.get("sensitivity", "unknown")
             
             category = classification.get("category", "general_note")
-            sensitivity = classification.get("sensitivity", "teacher_private")
-            confidence = classification.get("confidence", 0.5)
             
             # 3. Check privacy safety rules using the Policy Gate
             self.state_changed.emit("POLICY_CHECKING")
             gate = PolicyGate()
             telegram_allowed = gate.is_telegram_allowed(sensitivity, category, transcript)
+            classification["telegram_allowed"] = telegram_allowed
+            
+            if telegram_allowed:
+                classification["route"] = "telegram_agent_task"
+            else:
+                classification["route"] = f"local_{category}"
             
             # 4. Route and write the Markdown note into the Obsidian vault
             self.state_changed.emit("ROUTING")
             vault_path = self.settings_manager.get("obsidian_vault_path")
             writer = ObsidianWriter(vault_path)
             
-            # Formulate note title from the first few words of the transcript
-            words = transcript.strip().split()
-            title = " ".join(words[:5]) if words else "Voice Note"
-            title = "".join(c for c in title if c.isalnum() or c.isspace())
-            if not title.strip():
-                title = "Voice Note"
-                
             self.state_changed.emit("WRITING_OUTPUT")
             
-            if telegram_allowed:
-                route = "telegram_agent_task"
-            else:
-                route = f"local_{category}"
-                
             note_path = writer.write_note(
-                title=title,
+                classification_data=classification,
                 transcript=transcript,
-                category=category,
-                route=route,
-                sensitivity=sensitivity,
                 duration_seconds=self.duration_seconds,
-                audio_file_path=self.wav_path,
-                telegram_allowed=telegram_allowed,
-                confidence=confidence
+                audio_file_path=self.wav_path
             )
             
+            # If reminder, generate ICS and emit signal to register reminder on main thread
+            if category == "reminder":
+                from app.destinations.ics_writer import ICSWriter
+                try:
+                    ics_writer = ICSWriter(vault_path)
+                    ics_writer.write_ics(classification, transcript)
+                except Exception as e:
+                    log_audit_event("ICS_WRITE_ERROR", "session", f"Failed to generate ICS: {e}")
+                self.reminder_captured.emit(classification, note_path)
+            
             # 5. External route trigger if approved by Policy Gate and enabled
-            if telegram_allowed and self.settings_manager.get("telegram_enabled"):
-                token = self.settings_manager.get("telegram_token")
-                chat_id = self.settings_manager.get("telegram_chat_id")
-                if token and chat_id:
-                    try:
-                        import httpx
-                        # Send text message to Telegram channel/chat
-                        url = f"https://api.telegram.org/bot{token}/sendMessage"
-                        payload = {"chat_id": chat_id, "text": f"New Agent Task:\n{transcript}"}
-                        httpx.post(url, json=payload, timeout=10.0)
-                        log_audit_event("TELEGRAM_SEND_SUCCESS", "session", f"Task sent to Telegram chat {chat_id}")
-                    except Exception as e:
-                        log_audit_event("TELEGRAM_SEND_ERROR", "session", f"Failed to send task to Telegram: {e}")
+            if telegram_allowed and self.settings_manager.get("agents.enabled"):
+                from app.destinations.telegram_dispatcher import TelegramDispatcher
+                dispatcher = TelegramDispatcher(self.settings_manager)
+                dispatcher.dispatch(transcript, classification, note_path)
             
             # 6. Copy WAV file to Obsidian Vault Audio directory and clean up temporary audio file
             if note_path and os.path.exists(self.wav_path):

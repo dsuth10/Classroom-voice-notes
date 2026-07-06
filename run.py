@@ -47,6 +47,10 @@ def main() -> None:
     controller.state_changed.connect(indicator.set_state)
     controller.recording_time_updated.connect(indicator.update_recording_time)
     
+    # Wire indicator context menu requests to controller slots
+    indicator.generate_daily_summary_requested.connect(controller.generate_daily_summary)
+    indicator.rebuild_index_requested.connect(controller.rebuild_student_index)
+    
     # Set initial state and position indicator in top-right of screen
     indicator.set_state(controller.state)
     screen = app.primaryScreen()

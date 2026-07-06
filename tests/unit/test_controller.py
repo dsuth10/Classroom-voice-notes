@@ -19,6 +19,9 @@ def settings_manager(tmp_path) -> SettingsManager:
     with mock.patch("app.config.settings.get_config_path", return_value=config_file):
         manager = SettingsManager()
         manager.set("recording.hard_cap_seconds", 60)
+        vault_dir = tmp_path / "vault"
+        vault_dir.mkdir(parents=True, exist_ok=True)
+        manager.set("obsidian_vault_path", str(vault_dir))
         yield manager
 
 @pytest.fixture(autouse=True)

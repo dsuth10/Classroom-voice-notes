@@ -21,9 +21,25 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "ollama_url": "http://localhost:11434",
     "fast_model": "qwen3.5:latest",
     "careful_model": "phi4:14b",
-    "telegram_token": "",
-    "telegram_chat_id": "",
-    "telegram_enabled": False,
+    "agents": {
+        "enabled": False,
+        "telegram_token": "",
+        "default_agent": "hermes",
+        "agents": {
+            "hermes": {
+                "display_name": "Hermes",
+                "chat_id": "",
+                "description": "General-purpose AI assistant. Research, planning, professional tasks.",
+                "enabled": True
+            },
+            "openclaw": {
+                "display_name": "OpenClaw",
+                "chat_id": "",
+                "description": "Specialised agent. Code, technical, and analytical tasks.",
+                "enabled": True
+            }
+        }
+    },
     "wake_word": {
         "engine": "openwakeword",
         "enabled": True,
@@ -76,6 +92,37 @@ class SettingsManager:
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
+                
+                # Perform migration of old flat Telegram settings to nested agents structure if present
+                if isinstance(data, dict):
+                    old_enabled = data.get("telegram_enabled")
+                    old_token = data.get("telegram_token")
+                    old_chat_id = data.get("telegram_chat_id")
+                    
+                    if (old_enabled is not None or old_token is not None or old_chat_id is not None) and "agents" not in data:
+                        data["agents"] = {
+                            "enabled": old_enabled if old_enabled is not None else False,
+                            "telegram_token": old_token if old_token is not None else "",
+                            "default_agent": "hermes",
+                            "agents": {
+                                "hermes": {
+                                    "display_name": "Hermes",
+                                    "chat_id": old_chat_id if old_chat_id is not None else "",
+                                    "description": "General-purpose AI assistant. Research, planning, professional tasks.",
+                                    "enabled": True
+                                },
+                                "openclaw": {
+                                    "display_name": "OpenClaw",
+                                    "chat_id": "",
+                                    "description": "Specialised agent. Code, technical, and analytical tasks.",
+                                    "enabled": True
+                                }
+                            }
+                        }
+                        data.pop("telegram_enabled", None)
+                        data.pop("telegram_token", None)
+                        data.pop("telegram_chat_id", None)
+                        
                 # Ensure all default keys exist by doing a deep update
                 updated = copy.deepcopy(DEFAULT_SETTINGS)
                 if isinstance(data, dict):

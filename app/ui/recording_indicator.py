@@ -6,6 +6,8 @@ from PySide6.QtWidgets import QApplication
 
 class RecordingIndicator(QWidget):
     open_settings_requested = Signal()
+    generate_daily_summary_requested = Signal()
+    rebuild_index_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -124,10 +126,16 @@ class RecordingIndicator(QWidget):
     def contextMenuEvent(self, event: Any) -> None:
         menu = QMenu(self)
         settings_action = menu.addAction("Open Settings")
+        summary_action = menu.addAction("Generate Daily Summary")
+        index_action = menu.addAction("Rebuild Student Index")
         menu.addSeparator()
         quit_action = menu.addAction("Quit")
         action = menu.exec(event.globalPos())
         if action == settings_action:
             self.open_settings_requested.emit()
+        elif action == summary_action:
+            self.generate_daily_summary_requested.emit()
+        elif action == index_action:
+            self.rebuild_index_requested.emit()
         elif action == quit_action:
             QApplication.quit()

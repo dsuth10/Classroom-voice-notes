@@ -8,15 +8,10 @@ class ObsidianWriter:
 
     def write_note(
         self,
-        title: str,
+        classification_data: dict,
         transcript: str,
-        category: str,
-        route: str,
-        sensitivity: str,
         duration_seconds: int,
         audio_file_path: str = "",
-        telegram_allowed: bool = False,
-        confidence: float = 1.0,
     ) -> str:
         """Writes a YAML-frontmatter enabled Markdown file into the Obsidian vault folder structure.
         
@@ -25,8 +20,14 @@ class ObsidianWriter:
         if not self.vault_path.exists():
             raise FileNotFoundError(f"Obsidian Vault directory does not exist: {self.vault_path}")
             
+        category = classification_data.get("category", "general_note")
+        route = classification_data.get("route", "local_obsidian")
+        sensitivity = classification_data.get("sensitivity", "unknown")
+        telegram_allowed = classification_data.get("telegram_allowed", False)
+        confidence = classification_data.get("confidence", 0.0)
+        title = classification_data.get("title", "Voice Note")
+        
         # Determine the target subfolder inside the vault based on the category/route
-        # Mapping to match Obsidian Vault Design guidelines
         subfolder_map = {
             "student_note": "Student Notes",
             "behaviour_note": "Behaviour Notes",
@@ -51,7 +52,6 @@ class ObsidianWriter:
         if audio_file_path:
             audio_dir = self.vault_path / "Classroom Voice Notes" / "Audio"
             audio_dir.mkdir(parents=True, exist_ok=True)
-            # Copy audio file path references or relative path representation
             relative_audio_path = f"../Audio/{Path(audio_file_path).name}"
         else:
             relative_audio_path = ""
@@ -59,12 +59,22 @@ class ObsidianWriter:
         # Generate safe filename: YYYY-MM-DD_HH-MM-SS_category.md
         now = datetime.now()
         safe_title = title.lower().replace(" ", "_").replace(":", "-").replace("/", "-")
+        # Keep filename under reasonable length
+        if len(safe_title) > 50:
+            safe_title = safe_title[:50]
         filename = f"{now.strftime('%Y-%m-%d_%H-%M-%S')}_{safe_title}.md"
         file_path = target_dir / filename
         
-        # Build Markdown content with Frontmatter
-        # Note: Australian spelling used for metadata parameters (e.g. behaviour, organisation)
-        frontmatter = {
+        # Resolve student names to anonymised IDs
+        category_fields = dict(classification_data.get("category_fields", {}))
+        students_mentioned = category_fields.get("students_mentioned")
+        if students_mentioned:
+            from app.privacy.student_registry import StudentRegistry
+            registry = StudentRegistry(str(self.vault_path))
+            category_fields["students"] = registry.anonymise_list(students_mentioned)
+        
+        # Build Base Frontmatter
+        base_frontmatter = {
             "type": "classroom-voice-note",
             "route": route,
             "sensitivity": sensitivity,
@@ -79,48 +89,21 @@ class ObsidianWriter:
             "transcription_engine": "whisper.cpp",
             "telegram_allowed": telegram_allowed,
             "confidence": confidence,
-            "tags": ["classroom-note", category.replace("_", "-")]
+            "tags": classification_data.get("tags", ["classroom-note", category.replace("_", "-")])
         }
-        
-        # Build YAML frontmatter block
-        yaml_lines = ["---"]
-        for k, v in frontmatter.items():
-            if isinstance(v, list):
-                yaml_lines.append(f"{k}:")
-                for item in v:
-                    yaml_lines.append(f"  - {item}")
-            elif isinstance(v, bool):
-                yaml_lines.append(f"{k}: {str(v).lower()}")
-            elif isinstance(v, (int, float)):
-                yaml_lines.append(f"{k}: {v}")
-            else:
-                yaml_lines.append(f"{k}: {v}")
-        yaml_lines.append("---")
-        
-        # Markdown body
-        body = f"""
-# {title} — {now.strftime('%d %B %Y, %I:%M %p')}
-
-## Transcript
-
-{transcript}
-
-## Router Decision
-
-- Route: {route}
-- Sensitivity: {sensitivity}
-- Category: {category}
-- Telegram allowed: {str(telegram_allowed).lower()}
-- Confidence: {confidence}
-
-## Review Status
-
-- [ ] Checked transcript
-- [ ] Edited for accuracy
-- [ ] Added context if needed
-"""
-        
-        full_content = "\n".join(yaml_lines) + "\n" + body
+        if classification_data.get("summary"):
+            base_frontmatter["summary"] = classification_data["summary"]
+            
+        # Render using NoteTemplates
+        from app.destinations.note_templates import NoteTemplates
+        full_content = NoteTemplates.render(
+            category=category,
+            title=title,
+            now_str=now.strftime('%d %B %Y, %I:%M %p'),
+            transcript=transcript,
+            base_frontmatter=base_frontmatter,
+            category_fields=category_fields
+        )
         
         try:
             with open(file_path, "w", encoding="utf-8") as f:

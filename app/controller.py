@@ -43,6 +43,24 @@ class AppController(QObject):
         # Start wake-phrase listening if enabled in settings
         self._start_wake_word_worker()
 
+        # Initialize and start the reminder checking engine
+        from app.destinations.reminder_engine import ReminderEngine
+        vault_path = self.settings_manager.get("obsidian_vault_path")
+        self.reminder_engine = ReminderEngine(vault_path)
+        self.reminder_engine.start()
+
+        # Initialize and start the review manager
+        from app.destinations.review_manager import ReviewManager
+        self.review_manager = ReviewManager(vault_path, self.settings_manager, self.reminder_engine)
+        self.review_manager.start()
+
+        # Initialize and start periodic Student Index Rebuilding (every 5 minutes)
+        self.index_timer = QTimer(self)
+        self.index_timer.timeout.connect(self.rebuild_student_index)
+        self.index_timer.start(300000) # 5 minutes in milliseconds
+        # Trigger one rebuild shortly after startup in background
+        QTimer.singleShot(1000, self.rebuild_student_index)
+
     def set_state(self, new_state: str) -> None:
         old_state = self.state
         self.state = new_state.upper()
@@ -203,6 +221,7 @@ class AppController(QObject):
         self.pipeline_worker = PipelineWorker(wav_path, self.settings_manager, self.elapsed_seconds)
         self.pipeline_worker.state_changed.connect(self.set_state)
         self.pipeline_worker.finished_pipeline.connect(self._on_pipeline_finished)
+        self.pipeline_worker.reminder_captured.connect(self._on_reminder_captured)
         self.pipeline_worker.error_occurred.connect(self._on_pipeline_error)
         self.pipeline_worker.start()
         self.recorder_worker = None
@@ -213,6 +232,16 @@ class AppController(QObject):
         self.set_state("IDLE_LISTENING")
         self._start_wake_word_worker()
         self.pipeline_worker = None
+
+    def _on_reminder_captured(self, classification: dict, note_path: str) -> None:
+        reminder_time = classification.get("reminder_time")
+        if reminder_time:
+            self.reminder_engine.add_reminder(
+                title=classification.get("title", "Voice Note Reminder"),
+                summary=classification.get("summary", ""),
+                reminder_time_str=reminder_time,
+                file_path=note_path
+            )
 
     def _on_pipeline_error(self, err_msg: str) -> None:
         self.error_occurred.emit(err_msg)
@@ -256,6 +285,21 @@ class AppController(QObject):
         """Reloads settings and restarts the wake word worker if listening."""
         log_audit_event("SETTINGS_RELOADED", "controller", "Reloading settings from manager")
 
+        # Restart the reminder engine in case vault path has changed
+        if hasattr(self, 'reminder_engine') and self.reminder_engine:
+            self.reminder_engine.stop()
+        from app.destinations.reminder_engine import ReminderEngine
+        vault_path = self.settings_manager.get("obsidian_vault_path")
+        self.reminder_engine = ReminderEngine(vault_path)
+        self.reminder_engine.start()
+
+        # Restart the review manager in case vault path or settings changed
+        if hasattr(self, 'review_manager') and self.review_manager:
+            self.review_manager.stop()
+        from app.destinations.review_manager import ReviewManager
+        self.review_manager = ReviewManager(vault_path, self.settings_manager, self.reminder_engine)
+        self.review_manager.start()
+
         # Restart AudioInputManager to apply any new device_index configuration
         self.audio_input_manager.stop()
         
@@ -275,6 +319,12 @@ class AppController(QObject):
     def cleanup(self) -> None:
         """Gracefully stops all background workers and the audio stream. Call before app exit."""
         log_audit_event("CLEANUP", "controller", "Shutting down all workers and audio stream")
+        if hasattr(self, 'reminder_engine') and self.reminder_engine:
+            self.reminder_engine.stop()
+        if hasattr(self, 'review_manager') and self.review_manager:
+            self.review_manager.stop()
+        if hasattr(self, 'index_timer') and self.index_timer:
+            self.index_timer.stop()
         self._stop_timers()
         self._stop_wake_word_worker()
         self._stop_command_worker()
@@ -284,6 +334,31 @@ class AppController(QObject):
             self.recorder_worker.wait(3000)
             self.recorder_worker = None
         self.audio_input_manager.stop()
+
+    def rebuild_student_index(self) -> None:
+        """Trigger rebuilding of the local student index."""
+        try:
+            vault_path = self.settings_manager.get("obsidian_vault_path")
+            if not vault_path:
+                return
+            from app.destinations.student_index import StudentIndexBuilder
+            builder = StudentIndexBuilder(vault_path)
+            builder.rebuild_index()
+        except Exception as e:
+            log_audit_event("INDEX_TIMER_TRIGGER_ERROR", "controller", f"Failed to rebuild index: {e}")
+
+    def generate_daily_summary(self) -> None:
+        """Trigger daily summary generation for today."""
+        try:
+            vault_path = self.settings_manager.get("obsidian_vault_path")
+            if not vault_path:
+                return
+            from app.destinations.daily_summary import DailySummaryBuilder
+            builder = DailySummaryBuilder(vault_path, self.settings_manager)
+            summary_file, telegram_success = builder.generate_daily_summary()
+            log_audit_event("DAILY_SUMMARY_TRIGGER_SUCCESS", "controller", f"Generated: {summary_file}, telegram={telegram_success}")
+        except Exception as e:
+            log_audit_event("DAILY_SUMMARY_TRIGGER_ERROR", "controller", f"Failed to generate summary: {e}")
 
 
 

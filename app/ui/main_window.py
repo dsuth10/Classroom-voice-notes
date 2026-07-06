@@ -240,6 +240,72 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(cmd_group)
 
         # ----------------------------------------------------
+        # Group 4: Agent Dispatch (Telegram)
+        # ----------------------------------------------------
+        agent_group = QGroupBox("Agent Dispatch (Telegram)")
+        agent_layout = QVBoxLayout(agent_group)
+        agent_layout.setSpacing(8)
+
+        # Enabled checkbox
+        self.agent_enabled_chk = QCheckBox("Enable external agent task dispatching")
+        self.agent_enabled_chk.setChecked(self.settings_manager.get("agents.enabled"))
+        agent_layout.addWidget(self.agent_enabled_chk)
+
+        # Telegram Token
+        token_layout = QHBoxLayout()
+        agent_layout.addLayout(token_layout)
+        token_layout.addWidget(QLabel("Telegram Bot Token:"))
+        self.agent_token_edit = QLineEdit(self.settings_manager.get("agents.telegram_token") or "")
+        self.agent_token_edit.setEchoMode(QLineEdit.EchoMode.PasswordEchoOnEdit)
+        token_layout.addWidget(self.agent_token_edit)
+
+        # Default Agent Dropdown
+        default_layout = QHBoxLayout()
+        agent_layout.addLayout(default_layout)
+        default_layout.addWidget(QLabel("Default Agent Target:"))
+        self.agent_default_combo = QComboBox()
+        self.agent_default_combo.addItems(["hermes", "openclaw"])
+        current_default = self.settings_manager.get("agents.default_agent") or "hermes"
+        self.agent_default_combo.setCurrentText(current_default)
+        default_layout.addWidget(self.agent_default_combo)
+
+        # Hermes Group Settings
+        hermes_box = QGroupBox("Hermes Agent")
+        hermes_layout = QVBoxLayout(hermes_box)
+        hermes_layout.setSpacing(6)
+        
+        h_chat_layout = QHBoxLayout()
+        hermes_layout.addLayout(h_chat_layout)
+        h_chat_layout.addWidget(QLabel("Telegram Chat ID:"))
+        self.hermes_chat_edit = QLineEdit(self.settings_manager.get("agents.agents.hermes.chat_id") or "")
+        h_chat_layout.addWidget(self.hermes_chat_edit)
+        
+        self.hermes_enabled_chk = QCheckBox("Enable Hermes agent")
+        self.hermes_enabled_chk.setChecked(self.settings_manager.get("agents.agents.hermes.enabled"))
+        hermes_layout.addWidget(self.hermes_enabled_chk)
+        
+        agent_layout.addWidget(hermes_box)
+
+        # OpenClaw Group Settings
+        openclaw_box = QGroupBox("OpenClaw Agent")
+        openclaw_layout = QVBoxLayout(openclaw_box)
+        openclaw_layout.setSpacing(6)
+        
+        o_chat_layout = QHBoxLayout()
+        openclaw_layout.addLayout(o_chat_layout)
+        o_chat_layout.addWidget(QLabel("Telegram Chat ID:"))
+        self.openclaw_chat_edit = QLineEdit(self.settings_manager.get("agents.agents.openclaw.chat_id") or "")
+        o_chat_layout.addWidget(self.openclaw_chat_edit)
+        
+        self.openclaw_enabled_chk = QCheckBox("Enable OpenClaw agent")
+        self.openclaw_enabled_chk.setChecked(self.settings_manager.get("agents.agents.openclaw.enabled"))
+        openclaw_layout.addWidget(self.openclaw_enabled_chk)
+        
+        agent_layout.addWidget(openclaw_box)
+
+        main_layout.addWidget(agent_group)
+
+        # ----------------------------------------------------
         # Save Button
         # ----------------------------------------------------
         save_btn = QPushButton("Save Settings")
@@ -344,6 +410,15 @@ class MainWindow(QMainWindow):
         if selected_idx >= 0 and selected_idx < len(self.device_mapping):
             dev_idx = self.device_mapping[selected_idx]
             self.settings_manager.set("audio.device_index", dev_idx)
+
+        # Save Agent settings
+        self.settings_manager.set("agents.enabled", self.agent_enabled_chk.isChecked())
+        self.settings_manager.set("agents.telegram_token", self.agent_token_edit.text().strip())
+        self.settings_manager.set("agents.default_agent", self.agent_default_combo.currentText())
+        self.settings_manager.set("agents.agents.hermes.chat_id", self.hermes_chat_edit.text().strip())
+        self.settings_manager.set("agents.agents.hermes.enabled", self.hermes_enabled_chk.isChecked())
+        self.settings_manager.set("agents.agents.openclaw.chat_id", self.openclaw_chat_edit.text().strip())
+        self.settings_manager.set("agents.agents.openclaw.enabled", self.openclaw_enabled_chk.isChecked())
 
         if self.controller:
             try:
