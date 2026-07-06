@@ -1,7 +1,5 @@
-import os
 import json
 import httpx
-from pathlib import Path
 from app.config.settings import SettingsManager
 from app.ollama_router.classifier import OllamaClassifier
 
@@ -55,7 +53,7 @@ def main():
             print("\nRunning standard sample suite from command-line flag...")
             choice = "1"
         else:
-            print(f"\nClassifying custom text from command-line argument...")
+            print("\nClassifying custom text from command-line argument...")
             test_cases.append(("Command Line Input", arg))
     else:
         print("\n--- 2. Choose Test Mode ---")
@@ -93,7 +91,7 @@ def main():
             ("General Note", "The school assembly has been moved to Thursday afternoon due to the weather.")
         ]
         
-    print(f"\n--- 3. Running Classifications (Timeout is 30.0s) ---")
+    print("\n--- 3. Running Classifications (Timeout is 30.0s) ---")
     for name, transcript in test_cases:
         print(f"\nEvaluating Category: {name}")
         print(f"Transcript: \"{transcript}\"")

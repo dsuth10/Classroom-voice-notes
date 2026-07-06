@@ -1,9 +1,8 @@
-import os
 import time
 import httpx
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from app.audit.audit_logger import log_audit_event
 
 class TelegramDispatcher:

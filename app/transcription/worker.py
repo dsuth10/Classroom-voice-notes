@@ -4,7 +4,7 @@ import shutil
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 from PySide6.QtCore import QThread, Signal
 from app.transcription.transcriber import WhisperTranscriber
 from app.ollama_router.classifier import OllamaClassifier

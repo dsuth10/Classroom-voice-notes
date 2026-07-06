@@ -1,7 +1,6 @@
 import os
-import re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Tuple
 from PySide6.QtCore import QObject, QTimer, Slot
 from app.audit.audit_logger import log_audit_event
 from app.ollama_router.classifier import OllamaClassifier

@@ -141,7 +141,7 @@ class SettingsManager:
         except Exception as e:
             print(f"Failed to save settings: {e}")
 
-    def get(self, key: str) -> Any:
+    def get(self, key: str, default: Any = None) -> Any:
         """Retrieves a configuration parameter, prioritizing environment variable overrides for keys.
         
         Supports dot-separated paths for nested access (e.g. 'wake_word.engine').
@@ -166,7 +166,7 @@ class SettingsManager:
                     if isinstance(val, dict) and p in val:
                         val = val[p]
                     else:
-                        return None
+                        return default
                 return val
         return val
 

@@ -50,3 +50,12 @@ def test_nested_settings_save_and_load(temp_config_dir: Path) -> None:
     assert new_manager.get("wake_word.enabled") is False
     assert new_manager.get("audio.sample_rate") == 22050
 
+
+def test_settings_get_default_fallback(temp_config_dir: Path) -> None:
+    """Tests that get() returns the provided default fallback when a key does not exist."""
+    manager = SettingsManager()
+    assert manager.get("non_existent_key", "fallback_val") == "fallback_val"
+    assert manager.get("nested.non_existent.key", "fallback_nested") == "fallback_nested"
+    assert manager.get("non_existent_key_no_default") is None
+
+
