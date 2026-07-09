@@ -35,7 +35,7 @@ class AudioInputManager:
             return
         
         self.is_running = True
-        log_audit_event("MICROPHONE_STREAM_START", "audio", "Starting background audio input stream")
+        log_audit_event("MICROPHONE_STREAM_START", "audio", f"Starting background audio input stream (device={self.device_index})")
         
         try:
             # sounddevice InputStream starts a background C thread for audio capture
@@ -49,9 +49,27 @@ class AudioInputManager:
             )
             self.stream.start()
         except Exception as e:
-            self.is_running = False
-            log_audit_event("MICROPHONE_STREAM_ERROR", "audio", f"Failed to start stream: {e}")
-            raise e
+            if self.device_index is not None:
+                log_audit_event("MICROPHONE_STREAM_ERROR", "audio", f"Failed to start stream on device {self.device_index}: {e}. Retrying fallback to default system device.")
+                try:
+                    self.device_index = None
+                    self.stream = sd.InputStream(
+                        device=None,
+                        samplerate=self.sample_rate,
+                        channels=self.channels,
+                        dtype=np.int16,
+                        blocksize=self.chunk_size,
+                        callback=self._audio_callback
+                    )
+                    self.stream.start()
+                except Exception as fallback_err:
+                    self.is_running = False
+                    log_audit_event("MICROPHONE_STREAM_ERROR", "audio", f"Failed fallback stream: {fallback_err}")
+                    raise fallback_err
+            else:
+                self.is_running = False
+                log_audit_event("MICROPHONE_STREAM_ERROR", "audio", f"Failed to start stream: {e}")
+                raise e
 
     def stop(self) -> None:
         if not self.is_running:

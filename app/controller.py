@@ -23,7 +23,10 @@ class AppController(QObject):
         
         self.audio_input_manager = AudioInputManager(self.settings_manager)
         self.audio_input_manager.level_callback = self._on_audio_level
-        self.audio_input_manager.start()
+        try:
+            self.audio_input_manager.start()
+        except Exception as e:
+            log_audit_event("MICROPHONE_STREAM_ERROR", "controller", f"Failed to start audio input stream at startup: {e}")
         
         self.recorder_worker: Any = None
         self.wakeword_worker: Any = None
@@ -315,7 +318,17 @@ class AppController(QObject):
         device_idx = self.settings_manager.get("audio.device_index")
         self.audio_input_manager.device_index = int(device_idx) if device_idx is not None else None
         
-        self.audio_input_manager.start()
+        try:
+            self.audio_input_manager.start()
+        except Exception as e:
+            log_audit_event("MICROPHONE_STREAM_ERROR", "controller", f"Failed to restart audio input stream with new device index: {e}")
+            # Try to fall back to default system input device (None)
+            try:
+                log_audit_event("MICROPHONE_STREAM_FALLBACK", "controller", "Attempting fallback to default system input device")
+                self.audio_input_manager.device_index = None
+                self.audio_input_manager.start()
+            except Exception as fallback_err:
+                log_audit_event("MICROPHONE_STREAM_ERROR", "controller", f"Failed fallback to default system input device: {fallback_err}")
 
         if self.state == "IDLE_LISTENING":
             self._stop_wake_word_worker()
