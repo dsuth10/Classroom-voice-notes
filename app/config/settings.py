@@ -40,6 +40,18 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             }
         }
     },
+    "external_agent": {
+        "enabled": False,
+        "endpoint_url": "",
+        "hmac_secret_ref": "cvn_hmac_secret",
+        "bearer_token_ref": "cvn_bearer_token",
+        "target_agent_default": "hermes",
+        "source_device_id": "",
+        "allowed_target_agents": ["hermes", "openclaw", "auto"],
+        "allowed_endpoint_domains": ["supabase.co"],
+        "policy_gate_version": "1.0.0",
+        "max_payload_bytes": 65536
+    },
     "wake_word": {
         "engine": "openwakeword",
         "enabled": True,

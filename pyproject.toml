@@ -17,6 +17,7 @@ dependencies = [
     "scipy>=1.10.0",
     "plyer>=2.1.0",
     "icalendar>=5.0.0",
+    "keyring>=25.0.0",
 ]
 
 [project.optional-dependencies]

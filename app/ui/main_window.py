@@ -302,8 +302,49 @@ class MainWindow(QMainWindow):
         openclaw_layout.addWidget(self.openclaw_enabled_chk)
         
         agent_layout.addWidget(openclaw_box)
-
         main_layout.addWidget(agent_group)
+
+        # ----------------------------------------------------
+        # Group 4.5: External Agent Dispatch (Supabase Broker)
+        # ----------------------------------------------------
+        broker_group = QGroupBox("External Agent Dispatch (Supabase Broker)")
+        broker_layout = QVBoxLayout(broker_group)
+        broker_layout.setSpacing(8)
+        
+        # Enabled checkbox
+        self.broker_enabled_chk = QCheckBox("Enable Supabase broker dispatching")
+        self.broker_enabled_chk.setChecked(self.settings_manager.get("external_agent.enabled"))
+        broker_layout.addWidget(self.broker_enabled_chk)
+        
+        # Endpoint URL
+        endpoint_layout = QHBoxLayout()
+        broker_layout.addLayout(endpoint_layout)
+        endpoint_layout.addWidget(QLabel("Endpoint URL:"))
+        self.broker_endpoint_edit = QLineEdit(self.settings_manager.get("external_agent.endpoint_url") or "")
+        endpoint_layout.addWidget(self.broker_endpoint_edit)
+        
+        # Outbox stats display label
+        try:
+            from app.destinations.external_outbox import ExternalOutbox
+            stats = ExternalOutbox().get_stats()
+        except Exception:
+            stats = {"pending": 0, "sent": 0, "dead_letter": 0}
+            
+        self.outbox_status_label = QLabel(
+            f"Local Outbox: {stats['pending']} pending, {stats['sent']} sent, {stats['dead_letter']} stuck"
+        )
+        self.outbox_status_label.setStyleSheet("color: #555; font-size: 11px;")
+        
+        # Retrying outbox button
+        retry_layout = QHBoxLayout()
+        retry_layout.addWidget(self.outbox_status_label)
+        
+        self.retry_outbox_btn = QPushButton("Retry Outbox Now")
+        self.retry_outbox_btn.clicked.connect(self.retry_outbox_now)
+        retry_layout.addWidget(self.retry_outbox_btn)
+        broker_layout.addLayout(retry_layout)
+        
+        main_layout.addWidget(broker_group)
 
         # ----------------------------------------------------
         # Save Button
@@ -420,6 +461,10 @@ class MainWindow(QMainWindow):
         self.settings_manager.set("agents.agents.openclaw.chat_id", self.openclaw_chat_edit.text().strip())
         self.settings_manager.set("agents.agents.openclaw.enabled", self.openclaw_enabled_chk.isChecked())
 
+        # Save Broker Settings
+        self.settings_manager.set("external_agent.enabled", self.broker_enabled_chk.isChecked())
+        self.settings_manager.set("external_agent.endpoint_url", self.broker_endpoint_edit.text().strip())
+
         if self.controller:
             try:
                 self.controller.reload_settings()
@@ -430,6 +475,22 @@ class MainWindow(QMainWindow):
 
         QMessageBox.information(self, "Success", "Settings saved successfully.")
         self.close()
+
+    def retry_outbox_now(self) -> None:
+        """Trigger outbox transmission retry manually from settings."""
+        if self.controller:
+            try:
+                from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
+                dispatcher = ExternalAgentDispatcher(self.settings_manager)
+                sent = dispatcher.retry_pending()
+                from app.destinations.external_outbox import ExternalOutbox
+                stats = ExternalOutbox().get_stats()
+                self.outbox_status_label.setText(
+                    f"Local Outbox: {stats['pending']} pending, {stats['sent']} sent, {stats['dead_letter']} stuck"
+                )
+                QMessageBox.information(self, "Outbox Retry", f"Retried pending tasks. Sent {sent} tasks successfully.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to retry outbox:\n{e}")
 
 def prompt_first_launch_vault_picker(settings_manager: SettingsManager) -> str:
     """Checks if vault path is configured. If not, shows a folder dialog picker."""

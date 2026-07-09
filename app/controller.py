@@ -61,6 +61,12 @@ class AppController(QObject):
         # Trigger one rebuild shortly after startup in background
         QTimer.singleShot(1000, self.rebuild_student_index)
 
+        # Initialize and start the outbox retry timer (every 60 seconds)
+        self.outbox_retry_timer = QTimer(self)
+        self.outbox_retry_timer.timeout.connect(self._retry_pending_outbox)
+        if self.settings_manager.get("external_agent.enabled"):
+            self.outbox_retry_timer.start(60000)
+
     def set_state(self, new_state: str) -> None:
         old_state = self.state
         self.state = new_state.upper()
@@ -316,6 +322,12 @@ class AppController(QObject):
             # Defer engine rebuild to after the current Qt event completes
             QTimer.singleShot(0, self._start_wake_word_worker)
 
+        # Restart or stop the outbox retry timer depending on settings
+        if hasattr(self, "outbox_retry_timer") and self.outbox_retry_timer:
+            self.outbox_retry_timer.stop()
+            if self.settings_manager.get("external_agent.enabled"):
+                self.outbox_retry_timer.start(60000)
+
     def cleanup(self) -> None:
         """Gracefully stops all background workers and the audio stream. Call before app exit."""
         log_audit_event("CLEANUP", "controller", "Shutting down all workers and audio stream")
@@ -325,6 +337,8 @@ class AppController(QObject):
             self.review_manager.stop()
         if hasattr(self, 'index_timer') and self.index_timer:
             self.index_timer.stop()
+        if hasattr(self, 'outbox_retry_timer') and self.outbox_retry_timer:
+            self.outbox_retry_timer.stop()
         self._stop_timers()
         self._stop_wake_word_worker()
         self._stop_command_worker()
@@ -359,6 +373,16 @@ class AppController(QObject):
             log_audit_event("DAILY_SUMMARY_TRIGGER_SUCCESS", "controller", f"Generated: {summary_file}, telegram={telegram_success}")
         except Exception as e:
             log_audit_event("DAILY_SUMMARY_TRIGGER_ERROR", "controller", f"Failed to generate summary: {e}")
+
+    def _retry_pending_outbox(self) -> None:
+        """Retries sending any pending tasks from the local SQLite outbox."""
+        if self.settings_manager.get("external_agent.enabled"):
+            try:
+                from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
+                dispatcher = ExternalAgentDispatcher(self.settings_manager)
+                dispatcher.retry_pending()
+            except Exception as e:
+                log_audit_event("OUTBOX_RETRY_TIMER_ERROR", "controller", f"Failed to retry pending tasks: {e}")
 
 
 

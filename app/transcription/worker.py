@@ -114,11 +114,21 @@ class PipelineWorker(QThread):
                     log_audit_event("ICS_WRITE_ERROR", "session", f"Failed to generate ICS: {e}")
                 self.reminder_captured.emit(classification, note_path)
             
-            # 5. External route trigger if approved by Policy Gate and enabled
-            if telegram_allowed and self.settings_manager.get("agents.enabled"):
+            # 5a. External route trigger if approved by Policy Gate and enabled
+            # Bypassed if the new Supabase broker is active to prevent double-sending
+            if (telegram_allowed 
+                and self.settings_manager.get("agents.enabled")
+                and not self.settings_manager.get("external_agent.enabled")):
                 from app.destinations.telegram_dispatcher import TelegramDispatcher
                 dispatcher = TelegramDispatcher(self.settings_manager)
                 dispatcher.dispatch(transcript, classification, note_path)
+            
+            # 5b. New broker route (independent of Telegram)
+            if (classification.get("category") == "agent_task"
+                and self.settings_manager.get("external_agent.enabled")):
+                from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
+                broker_dispatcher = ExternalAgentDispatcher(self.settings_manager)
+                broker_dispatcher.dispatch(classification, note_path, transcript)
             
             # 6. Copy WAV file to Obsidian Vault Audio directory and clean up temporary audio file
             if note_path and os.path.exists(self.wav_path):

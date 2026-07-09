@@ -1,0 +1,204 @@
+import sqlite3
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from app.utils.paths import get_app_data_dir
+from app.audit.audit_logger import log_audit_event
+
+class ExternalOutbox:
+    def __init__(self, db_path: Optional[Path] = None) -> None:
+        if db_path is None:
+            self.db_path = get_app_data_dir() / "external_outbox.db"
+        else:
+            self.db_path = db_path
+            
+        self._init_db()
+
+    def _init_db(self) -> None:
+        """Initialise database schema if it does not exist."""
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS outbox (
+                    local_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id         TEXT NOT NULL UNIQUE,
+                    created_at      TEXT NOT NULL,
+                    endpoint_url    TEXT NOT NULL,
+                    payload_json    TEXT NOT NULL,
+                    payload_hash    TEXT NOT NULL,
+                    status          TEXT NOT NULL DEFAULT 'pending',
+                    attempt_count   INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at   TEXT,
+                    last_error      TEXT,
+                    sent_at         TEXT,
+                    remote_msg_id   TEXT,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    nonce           TEXT NOT NULL
+                );
+            """)
+            conn.commit()
+
+    def enqueue(
+        self,
+        task_id: str,
+        endpoint_url: str,
+        payload_json: str,
+        payload_hash: str,
+        idempotency_key: str,
+        nonce: str
+    ) -> int:
+        """Enqueues a new pending task in the local outbox."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO outbox (
+                    task_id, created_at, endpoint_url, payload_json, payload_hash, 
+                    status, attempt_count, next_retry_at, idempotency_key, nonce
+                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+                """,
+                (task_id, now_str, endpoint_url, payload_json, payload_hash, now_str, idempotency_key, nonce)
+            )
+            conn.commit()
+            local_id = cursor.lastrowid
+            assert local_id is not None
+            log_audit_event("OUTBOX_ENQUEUED", "outbox", f"Task {task_id} enqueued locally (local_id: {local_id})")
+            return local_id
+
+    def mark_sending(self, local_id: int) -> None:
+        """Marks a task as sending and increments the attempt count."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET status = 'sending', attempt_count = attempt_count + 1
+                WHERE local_id = ?
+                """,
+                (local_id,)
+            )
+            conn.commit()
+
+    def mark_sent(self, local_id: int, remote_msg_id: Optional[str] = None) -> None:
+        """Marks a task as successfully sent to the remote broker."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET status = 'sent', sent_at = ?, remote_msg_id = ?, last_error = NULL
+                WHERE local_id = ?
+                """,
+                (now_str, remote_msg_id, local_id)
+            )
+            conn.commit()
+            log_audit_event("OUTBOX_SENT_SUCCESS", "outbox", f"Task local_id={local_id} successfully marked as sent")
+
+    def mark_failed(self, local_id: int, error_msg: str, max_attempts: int = 5) -> None:
+        """Handles a failed transmission attempt, calculating the next backoff time or dead-letter status."""
+        now = datetime.now(timezone.utc)
+        
+        # Read the current attempt count
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT attempt_count, task_id FROM outbox WHERE local_id = ?", (local_id,))
+            row = cursor.fetchone()
+            if not row:
+                return
+            
+            attempt_count = row["attempt_count"]
+            task_id = row["task_id"]
+            
+        if attempt_count >= max_attempts:
+            new_status = "dead_letter"
+            next_retry = None
+            log_audit_event(
+                "OUTBOX_DEAD_LETTER", 
+                "outbox", 
+                f"Task {task_id} reached max retries ({attempt_count}). Moved to dead_letter. Error: {error_msg}"
+            )
+        else:
+            new_status = "pending"
+            # Backoff: 3s -> 9s -> 27s -> 81s -> 243s -> then hourly (3600s)
+            backoff_delays = [3, 9, 27, 81, 243]
+            idx = attempt_count - 1
+            delay_seconds = backoff_delays[idx] if idx < len(backoff_delays) else 3600
+            next_retry = (now + timedelta(seconds=delay_seconds)).isoformat()
+            log_audit_event(
+                "OUTBOX_RETRY_SCHEDULED", 
+                "outbox", 
+                f"Task {task_id} failed (attempt {attempt_count}). Retrying in {delay_seconds}s. Error: {error_msg}"
+            )
+            
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET status = ?, next_retry_at = ?, last_error = ?
+                WHERE local_id = ?
+                """,
+                (new_status, next_retry, error_msg, local_id)
+            )
+            conn.commit()
+
+    def mark_duplicate(self, local_id: int, error_type: str) -> None:
+        """Handles a 409 conflict response (e.g. duplicate idempotency or nonce).
+        
+        Since the server already has the record, we treat this as a successful sent.
+        """
+        now_str = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET status = 'sent', sent_at = ?, last_error = ?
+                WHERE local_id = ?
+                """,
+                (now_str, f"Duplicate conflict (409): {error_type}", local_id)
+            )
+            conn.commit()
+            log_audit_event("OUTBOX_DUPLICATE_RESOLVED", "outbox", f"Task local_id={local_id} marked as sent due to 409 collision ({error_type})")
+
+    def get_pending(self) -> List[Dict[str, Any]]:
+        """Returns all outbox records that are currently 'pending' and due for retry."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT * FROM outbox
+                WHERE status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= ?)
+                ORDER BY local_id ASC
+                """,
+                (now_str,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def expire_old(self, days: int = 7) -> int:
+        """Moves pending/sending tasks older than specified days to dead_letter."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE outbox
+                SET status = 'dead_letter', last_error = 'Expired: exceeded retention period'
+                WHERE status IN ('pending', 'sending') AND created_at <= ?
+                """,
+                (cutoff,)
+            )
+            conn.commit()
+            count = cursor.rowcount
+            if count > 0:
+                log_audit_event("OUTBOX_EXPIRY", "outbox", f"Expired {count} pending tasks older than {days} days to dead_letter")
+            return count
+
+    def get_stats(self) -> Dict[str, int]:
+        """Returns the counts of messages in each status."""
+        stats = {"pending": 0, "sending": 0, "sent": 0, "failed": 0, "dead_letter": 0}
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("SELECT status, COUNT(*) FROM outbox GROUP BY status")
+            for row in cursor.fetchall():
+                status, count = row
+                stats[status] = count
+        return stats

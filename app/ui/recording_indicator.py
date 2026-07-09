@@ -8,6 +8,7 @@ class RecordingIndicator(QWidget):
     open_settings_requested = Signal()
     generate_daily_summary_requested = Signal()
     rebuild_index_requested = Signal()
+    retry_outbox_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -128,8 +129,34 @@ class RecordingIndicator(QWidget):
         settings_action = menu.addAction("Open Settings")
         summary_action = menu.addAction("Generate Daily Summary")
         index_action = menu.addAction("Rebuild Student Index")
+        
+        # Query local outbox stats
+        try:
+            from app.destinations.external_outbox import ExternalOutbox
+            stats = ExternalOutbox().get_stats()
+            pending = stats.get("pending", 0)
+            sending = stats.get("sending", 0)
+            dead_letter = stats.get("dead_letter", 0)
+            
+            menu.addSeparator()
+            if pending > 0 or sending > 0:
+                outbox_text = f"Outbox: {pending} pending"
+                if sending > 0:
+                    outbox_text += f" ({sending} sending)"
+                menu.addSection(outbox_text)
+                retry_action = menu.addAction("Retry Pending Tasks")
+            elif dead_letter > 0:
+                menu.addSection(f"Outbox: {dead_letter} stuck")
+                retry_action = menu.addAction("Retry Stuck Tasks")
+            else:
+                menu.addSection("Outbox: Empty/Sent")
+                retry_action = None
+        except Exception:
+            retry_action = None
+
         menu.addSeparator()
         quit_action = menu.addAction("Quit")
+        
         action = menu.exec(event.globalPos())
         if action == settings_action:
             self.open_settings_requested.emit()
@@ -137,5 +164,7 @@ class RecordingIndicator(QWidget):
             self.generate_daily_summary_requested.emit()
         elif action == index_action:
             self.rebuild_index_requested.emit()
+        elif retry_action and action == retry_action:
+            self.retry_outbox_requested.emit()
         elif action == quit_action:
             QApplication.quit()
