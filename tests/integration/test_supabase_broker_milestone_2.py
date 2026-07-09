@@ -1,7 +1,13 @@
 # tests/integration/test_supabase_broker_milestone_2.py
+# Run against staging ONLY. Load secrets from environment variables — never hardcode.
+#
+# Required env vars:
+#   CVN_BEARER_TOKEN           — client (CVN app) bearer token
+#   CVN_HMAC_SECRET            — client HMAC secret
+#   AGENT_BROKER_BEARER_TOKEN  — worker bearer token
+#   AGENT_BROKER_HMAC_SECRET   — worker HMAC secret
 import os
 import sys
-import time
 import subprocess
 import secrets
 import datetime
@@ -10,44 +16,23 @@ import hmac
 import requests
 import json
 
-# Target staging project ref
+# Target staging project ref only — never production
 PROJECT_REF = "ukqkkgzimhtjhlnmlyao"
 BASE_URL = f"https://{PROJECT_REF}.supabase.co/functions/v1"
 
-def get_staging_secrets():
-    print("[*] Fetching staging secrets from Supabase CLI...")
-    res = subprocess.run(
-        ["npx", "--prefer-offline", "supabase", "secrets", "list", "--project-ref", PROJECT_REF],
-        capture_output=True,
-        text=True,
-        shell=True
-    )
-    if res.returncode != 0:
-        print(f"[-] Failed to fetch secrets: {res.stderr}")
+def _require_env(name: str) -> str:
+    val = os.environ.get(name, "").strip()
+    if not val:
+        print(f"[-] Missing required environment variable: {name}")
         sys.exit(1)
-    
-    # Parse JSON list
-    try:
-        data = json.loads(res.stdout)
-    except Exception as e:
-        print(f"[-] Failed to parse secrets JSON: {e}\nRaw output: {res.stdout}")
-        sys.exit(1)
-        
-    secrets_dict = {}
-    secrets_list = data.get("secrets", data)
-    if not isinstance(secrets_list, list):
-        secrets_list = data
-    for item in secrets_list:
-        if isinstance(item, dict) and "name" in item and "value" in item:
-            secrets_dict[item["name"]] = item["value"]
-            
-    required = ["CVN_BEARER_TOKEN", "CVN_HMAC_SECRET", "AGENT_BROKER_BEARER_TOKEN", "AGENT_BROKER_HMAC_SECRET"]
-    for r in required:
-        if r not in secrets_dict:
-            print(f"[-] Missing secret: {r}")
-            sys.exit(1)
-            
-    return secrets_dict
+    return val
+
+# Fail fast if secrets are missing
+CLIENT_BEARER = _require_env("CVN_BEARER_TOKEN")
+CLIENT_HMAC   = _require_env("CVN_HMAC_SECRET")
+WORKER_BEARER = _require_env("AGENT_BROKER_BEARER_TOKEN")
+WORKER_HMAC   = _require_env("AGENT_BROKER_HMAC_SECRET")
+
 
 def run_db_query(sql: str) -> dict:
     """Executes a SQL query on staging via Supabase Management API."""
@@ -85,10 +70,10 @@ def clean_database():
     print("[+] Database clean.")
 
 def test_milestone_2():
-    client_bearer = "6ff9863462ca0900ce4e152cf2fc91c6757fee5d528383fae96096369e64b1ad"
-    client_hmac = "57452a8b75bf61559c5c1cdc03971a34977ff53864791ec4de99c7723b72ca58"
-    worker_bearer = "19ef988083a5c6bdbe770f372e2438e88902450aaec13df76d354a800e60f608"
-    worker_hmac = "33906e41a79a0cac40d8b48f7a4b49f975e90796854a255bdb2e5c343f08f924"
+    client_bearer = CLIENT_BEARER
+    client_hmac   = CLIENT_HMAC
+    worker_bearer = WORKER_BEARER
+    worker_hmac   = WORKER_HMAC
 
     clean_database()
     
