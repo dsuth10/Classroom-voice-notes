@@ -66,6 +66,21 @@ class ExternalOutbox:
             log_audit_event("OUTBOX_ENQUEUED", "outbox", f"Task {task_id} enqueued locally (local_id: {local_id})")
             return local_id
 
+    def reset_dead_letter_tasks(self) -> None:
+        """Resets all 'dead_letter' tasks back to 'pending' with 0 attempts and current time for retry."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET status = 'pending', attempt_count = 0, next_retry_at = ?, last_error = NULL
+                WHERE status = 'dead_letter'
+                """,
+                (now_str,)
+            )
+            conn.commit()
+            log_audit_event("OUTBOX_DEAD_LETTER_RESET", "outbox", "Reset all dead_letter tasks to pending for manual retry")
+
     def mark_sending(self, local_id: int) -> None:
         """Marks a task as sending and increments the attempt count."""
         with sqlite3.connect(self.db_path) as conn:

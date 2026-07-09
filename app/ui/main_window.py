@@ -482,7 +482,7 @@ class MainWindow(QMainWindow):
             try:
                 from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
                 dispatcher = ExternalAgentDispatcher(self.settings_manager)
-                sent = dispatcher.retry_pending()
+                sent = dispatcher.retry_pending(manual=True)
                 from app.destinations.external_outbox import ExternalOutbox
                 stats = ExternalOutbox().get_stats()
                 self.outbox_status_label.setText(

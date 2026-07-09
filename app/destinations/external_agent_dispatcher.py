@@ -174,8 +174,11 @@ class ExternalAgentDispatcher:
             self._update_note_frontmatter(Path(note_path), {"status": "dispatch_failed"})
             return False
 
-    def retry_pending(self) -> int:
+    def retry_pending(self, manual: bool = False) -> int:
         """Retries all pending tasks in the outbox that are past their next_retry_at time."""
+        if manual:
+            self.outbox.reset_dead_letter_tasks()
+            
         pending_tasks = self.outbox.get_pending()
         if not pending_tasks:
             return 0

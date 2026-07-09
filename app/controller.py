@@ -374,13 +374,13 @@ class AppController(QObject):
         except Exception as e:
             log_audit_event("DAILY_SUMMARY_TRIGGER_ERROR", "controller", f"Failed to generate summary: {e}")
 
-    def _retry_pending_outbox(self) -> None:
+    def _retry_pending_outbox(self, manual: bool = False) -> None:
         """Retries sending any pending tasks from the local SQLite outbox."""
         if self.settings_manager.get("external_agent.enabled"):
             try:
                 from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
                 dispatcher = ExternalAgentDispatcher(self.settings_manager)
-                dispatcher.retry_pending()
+                dispatcher.retry_pending(manual=manual)
             except Exception as e:
                 log_audit_event("OUTBOX_RETRY_TIMER_ERROR", "controller", f"Failed to retry pending tasks: {e}")
 

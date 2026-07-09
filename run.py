@@ -50,7 +50,7 @@ def main() -> None:
     # Wire indicator context menu requests to controller slots
     indicator.generate_daily_summary_requested.connect(controller.generate_daily_summary)
     indicator.rebuild_index_requested.connect(controller.rebuild_student_index)
-    indicator.retry_outbox_requested.connect(controller._retry_pending_outbox)
+    indicator.retry_outbox_requested.connect(lambda: controller._retry_pending_outbox(manual=True))
     
     # Set initial state and position indicator in top-right of screen
     indicator.set_state(controller.state)
