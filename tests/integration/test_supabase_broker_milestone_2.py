@@ -35,7 +35,7 @@ WORKER_HMAC   = _require_env("AGENT_BROKER_HMAC_SECRET")
 
 
 def run_db_query(sql: str) -> dict:
-    """Executes a SQL query on staging via Supabase Management API."""
+    """Executes a SQL query on staging via Supabase CLI."""
     res = subprocess.run(
         ["npx", "--prefer-offline", "supabase", "db", "query", "--linked", sql],
         capture_output=True,
@@ -43,15 +43,17 @@ def run_db_query(sql: str) -> dict:
         shell=True
     )
     if res.returncode != 0:
-        raise RuntimeError(f"SQL execution failed: {res.stderr}")
-    
+        raise RuntimeError(f"SQL execution failed: {res.stderr}\nStdout: {res.stdout}")
+
+    # CLI emits preamble lines (e.g. "Initialising login role...") before the JSON block.
+    # Strip everything before the first '{' to get clean JSON.
+    stdout = res.stdout.strip()
+    json_start = stdout.find("{")
+    if json_start == -1:
+        # No JSON returned (e.g. DDL with no result set) — return empty rows
+        return {"rows": []}
     try:
-        lines = res.stdout.strip().split("\n")
-        json_str = ""
-        for line in lines:
-            if line.strip().startswith("{") or json_str:
-                json_str += line
-        return json.loads(json_str)
+        return json.loads(stdout[json_start:])
     except Exception as e:
         raise RuntimeError(f"Failed to parse SQL output: {e}\nRaw: {res.stdout}")
 
@@ -60,13 +62,11 @@ def hmac_sha256_hex(body: str, secret: str) -> str:
 
 def clean_database():
     print("[*] Cleaning up staging database before test...")
-    sql = (
-        "truncate table public.cvn_task_events cascade; "
-        "delete from public.cvn_tasks; "
-        "delete from public.cvn_processed_nonces; "
-        "select pgmq.purge_queue('cvn_tasks_queue');"
-    )
-    run_db_query(sql)
+    # Run each statement separately — TRUNCATE CASCADE may be slow under a combined statement
+    run_db_query("truncate table public.cvn_task_events cascade")
+    run_db_query("delete from public.cvn_tasks")
+    run_db_query("delete from public.cvn_processed_nonces")
+    run_db_query("select pgmq.purge_queue('cvn_tasks_queue')")
     print("[+] Database clean.")
 
 def test_milestone_2():
