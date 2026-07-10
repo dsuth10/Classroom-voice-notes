@@ -454,7 +454,7 @@ def test_milestone_2():
     
     # Claim next task (triggers stale claim reaping internally!)
     claim_payload["nonce"] = secrets.token_hex(16)
-    requests.post(
+    res = requests.post(
         f"{BASE_URL}/cvn-claim-task",
         data=json.dumps(claim_payload, separators=(",", ":")),
         headers={
@@ -464,12 +464,30 @@ def test_milestone_2():
         },
         timeout=60.0
     )
+    assert res.status_code == 200, f"Claim failed: {res.text}"
+    claim_data = res.json()
     
-    # Verify task is returned to pending and retry_count is 1
-    db_rows = run_db_query(f"select status, retry_count from public.cvn_tasks where task_id = '{task_id3}'")
-    assert db_rows["rows"][0]["status"] == "pending"
-    assert db_rows["rows"][0]["retry_count"] == 1
-    print("[+] Stale claim successfully reaped and requeued.")
+    # Verify the claim endpoint returned that same task
+    assert claim_data["claimed"] is True
+    assert claim_data["task_id"] == task_id3
+    assert claim_data["status"] == "claimed"
+    
+    # Verify database state shows status is claimed, retry_count is 1,
+    # queue_msg_id (claim token) is valid, and expires_at is renewed (greater than now)
+    db_rows = run_db_query(f"select status, retry_count, queue_msg_id, expires_at from public.cvn_tasks where task_id = '{task_id3}'")
+    row = db_rows["rows"][0]
+    assert row["status"] == "claimed"
+    assert row["retry_count"] == 1
+    assert row["queue_msg_id"] is not None
+    assert row["expires_at"] is not None
+    
+    # Check that visibility deadline (expires_at) has been renewed to the future
+    # (Since we expired it to now() - 1s, the new expires_at must be in the future)
+    expires_dt = datetime.datetime.fromisoformat(row["expires_at"])
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    assert expires_dt > now_utc, f"expires_at {expires_dt} is not in the future compared to {now_utc}"
+    
+    print("[+] Stale claim successfully reaped, returned to queue, and immediately reclaimed.")
     print("[+] Scenario 7: Passed")
 
     # =====================================================================
@@ -515,11 +533,19 @@ def test_milestone_2():
     # =====================================================================
     print("\n[*] Scenario 9: Query status safely")
     nonce_status = secrets.token_hex(16)
-    canonical = f"GET\n/functions/v1/cvn-status/{task_id}\ntask_id={task_id}\nsigned_at={now.isoformat()}\nnonce={nonce_status}"
+    # Generate a fresh timestamp and use requests' params parameter
+    # so that the '+' in timezone offset is properly URL-encoded as '%2B'
+    now_status = datetime.datetime.now(datetime.timezone.utc)
+    signed_at_str = now_status.isoformat()
+    canonical = f"GET\n/functions/v1/cvn-status/{task_id}\ntask_id={task_id}\nsigned_at={signed_at_str}\nnonce={nonce_status}"
     status_sig = hmac_sha256_hex(canonical, client_hmac)
     
     res = requests.get(
-        f"{BASE_URL}/cvn-status/{task_id}?signed_at={now.isoformat()}&nonce={nonce_status}",
+        f"{BASE_URL}/cvn-status/{task_id}",
+        params={
+            "signed_at": signed_at_str,
+            "nonce": nonce_status
+        },
         headers={
             "Authorization": f"Bearer {client_bearer}",
             "x-cvn-signature": status_sig
