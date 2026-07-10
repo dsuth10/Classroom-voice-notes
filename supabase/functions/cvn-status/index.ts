@@ -154,7 +154,7 @@ serve(async (req: Request) => {
   // 7. Query Task (withhold sensitive payload)
   const { data: task, error } = await supabase
     .from("cvn_tasks")
-    .select("task_id, status, target_agent, created_at, claimed_at, completed_at, failed_at, retry_count, result_summary, error_message")
+    .select("task_id, status, target_agent, created_at, claimed_at, completed_at, failed_at, retry_count, result_summary, error_message, error_code")
     .eq("task_id", taskId)
     .maybeSingle();
 

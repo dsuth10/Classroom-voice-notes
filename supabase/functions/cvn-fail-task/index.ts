@@ -92,18 +92,36 @@ serve(async (req: Request) => {
       headers: { ...corsHeaders, "content-type": "application/json" }
     });
   }
-  if (typeof payload?.worker_id !== "string" || payload.worker_id.length === 0) {
-    return new Response("worker_id required", { status: 400, headers: corsHeaders });
+  const workerId = payload?.worker_id ?? payload?.claim_token;
+  if (typeof workerId !== "string" || workerId.length === 0) {
+    return new Response("worker_id or claim_token required", { status: 400, headers: corsHeaders });
   }
-  if (
-    typeof payload?.error_message !== "string" ||
-    payload.error_message.length === 0 ||
-    payload.error_message.length > MAX_ERROR_MESSAGE_LENGTH
-  ) {
-    return new Response(`error_message required, max ${MAX_ERROR_MESSAGE_LENGTH} chars`, {
+
+  let errorMsg: string;
+  let errorCode: string;
+  let disposition: string;
+
+  if (payload?.failure && typeof payload.failure === "object") {
+    errorMsg = payload.failure.message;
+    errorCode = payload.failure.code;
+    disposition = payload.failure.disposition;
+  } else {
+    errorMsg = payload?.error_message;
+    errorCode = "LEGACY_ERROR";
+    disposition = "retryable";
+  }
+
+  if (typeof errorMsg !== "string" || errorMsg.length === 0 || errorMsg.length > MAX_ERROR_MESSAGE_LENGTH) {
+    return new Response(`error message required, max ${MAX_ERROR_MESSAGE_LENGTH} chars`, {
       status: 400,
       headers: corsHeaders
     });
+  }
+  if (typeof errorCode !== "string" || errorCode.length === 0) {
+    return new Response("error code required", { status: 400, headers: corsHeaders });
+  }
+  if (!["retryable", "permanent", "execution_unknown"].includes(disposition)) {
+    return new Response("Invalid failure disposition", { status: 400, headers: corsHeaders });
   }
 
   // 5. Stale timestamp check
@@ -123,7 +141,7 @@ serve(async (req: Request) => {
     .from("cvn_processed_nonces")
     .insert({
       nonce: payload.nonce,
-      worker_id: payload.worker_id,
+      worker_id: workerId,
       endpoint: "cvn-fail-task",
       signed_at: payload.signed_at,
       request_hash: requestHash
@@ -142,8 +160,10 @@ serve(async (req: Request) => {
   // 7. Atomic DB Fail
   const { data, error } = await supabase.rpc("cvn_fail_task", {
     p_task_id: payload.task_id,
-    p_worker_id: payload.worker_id,
-    p_error_message: payload.error_message,
+    p_worker_id: workerId,
+    p_error_message: errorMsg,
+    p_error_code: errorCode,
+    p_disposition: disposition,
     p_max_retries: 5
   });
 

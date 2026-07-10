@@ -89,6 +89,10 @@ serve(async (req: Request) => {
     return new Response("worker_id required", { status: 400, headers: corsHeaders });
   }
   const vtSeconds = typeof payload?.vt_seconds === "number" ? payload.vt_seconds : 1800; // 30 mins default
+  const targetAgent = payload?.target_agent ?? "hermes";
+  if (!["hermes", "openclaw"].includes(targetAgent)) {
+    return new Response("Invalid target_agent", { status: 400, headers: corsHeaders });
+  }
 
   // 5. Stale timestamp check
   const signedAtMs = Date.parse(payload.signed_at);
@@ -126,7 +130,8 @@ serve(async (req: Request) => {
   // 7. Atomic DB Claim
   const { data, error } = await supabase.rpc("cvn_claim_next_task", {
     p_worker_id: payload.worker_id,
-    p_vt_seconds: vtSeconds
+    p_vt_seconds: vtSeconds,
+    p_target_agent: targetAgent
   });
 
   if (error) {

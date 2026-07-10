@@ -44,6 +44,7 @@ All communication with the broker is conducted over HTTPS using Edge Functions. 
 {
   "worker_id": "worker_identifier",
   "vt_seconds": 1800,
+  "target_agent": "hermes | openclaw",
   "signed_at": "ISO-8601-UTC-TIMESTAMP",
   "nonce": "nonce_hex_16"
 }
@@ -93,7 +94,11 @@ All communication with the broker is conducted over HTTPS using Edge Functions. 
 {
   "task_id": "CVN-YYYYMMDD-HHMMSS-XXXX",
   "worker_id": "worker_identifier",
-  "error_message": "Error details",
+  "failure": {
+    "code": "UNSUPPORTED_TASK_TYPE | INVALID_TASK_PAYLOAD | CONNECT_TIMEOUT | etc",
+    "message": "Sanitised error details",
+    "disposition": "retryable | permanent | execution_unknown"
+  },
   "signed_at": "ISO-8601-UTC-TIMESTAMP",
   "nonce": "nonce_hex_16"
 }
@@ -102,7 +107,7 @@ All communication with the broker is conducted over HTTPS using Edge Functions. 
 ```json
 {
   "success": true,
-  "status": "pending | dead_letter",
+  "status": "pending | dead_letter | manual_review",
   "retry_count": 1
 }
 ```
@@ -133,10 +138,12 @@ Workers evaluate task instructions based on domain-oriented task types. When ins
 - **Idempotency:** Completion and failure requests are idempotent. If a worker completes an already completed task, the broker returns `success: true` with status `already_completed` rather than failing.
 
 ### 3.2. Retry Limits & Failure Handling
-- **Maximum Retry Limit:** Tasks are permitted a maximum of **5 attempts** (initial run + 4 retries).
-- **Retryable Failures:** Submitted via `cvn-fail-task` with transient error messages. The task transitions to `pending` and is requeued.
-- **Permanent Failures:** Malformed tasks or permanent validation errors should also be reported via `cvn-fail-task`. Due to broker interface restrictions, the task will be retried up to the 5-attempt limit before transitioning permanently to `dead_letter`.
-- **Unsupported Version Handling:** If a worker encounters an unsupported envelope `schema_version`, it must fail the task with the message `"Unsupported schema version: [version]"` to prevent execution loops.
+- **Maximum Retry Limit:** Tasks are permitted a maximum of **5 attempts** (initial run + 4 retries) under the `retryable` disposition.
+- **Failure Dispositions:**
+  - **`retryable`**: Submitted via `cvn-fail-task` with transient error messages. The task transitions to `pending` and is requeued. It transitions to `dead_letter` when the 5-attempt limit is reached.
+  - **`permanent`**: Submitted via `cvn-fail-task` for terminal validation or contract errors. The task transitions immediately to `dead_letter` and is removed from the active queue to avoid unnecessary retries.
+  - **`execution_unknown`**: Submitted via `cvn-fail-task` when a read timeout occurs after successful request dispatch. The task transitions immediately to `manual_review` and is removed from the active queue to prevent automated duplicate execution.
+- **Unsupported Version Handling:** If a worker encounters an unsupported envelope `schema_version`, it must fail the task with `disposition: permanent` and the message `"Unsupported schema version: [version]"` to prevent execution loops.
 
 ---
 
@@ -150,3 +157,4 @@ Workers evaluate task instructions based on domain-oriented task types. When ins
 ### 4.2. Logging and Privacy Restrictions
 - **No Secret Logging:** Workers must never log or output HTTP Authorization headers, HMAC signatures, nonces, or raw credential tokens to console logs or file registries.
 - **Redaction Integrity:** Workers must respect the `privacy` classification and ensure no raw transcript secrets or student identification records are exposed outside the secure enclave boundaries.
+
