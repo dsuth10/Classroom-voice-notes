@@ -53,6 +53,7 @@ class BrokerWorker:
             "OPENCLAW_GATEWAY_TOKEN_FILE",
             "openclaw_gateway_token"
         )
+        self.key_id = os.getenv("AGENT_BROKER_KEY_ID")
         
         # Verify safety guards
         if CVN_BROKER_ENV == "production" and CVN_ALLOW_PRODUCTION_WORKER != "true":
@@ -117,6 +118,8 @@ class BrokerWorker:
             "x-cvn-signature": sig,
             "Content-Type": "application/json"
         }
+        if self.key_id:
+            headers["x-cvn-key-id"] = self.key_id
         return requests.post(url, data=body_bytes, headers=headers, timeout=15.0)
         
     def complete_task(self, task_id: str, summary: str) -> bool:

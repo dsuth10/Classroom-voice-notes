@@ -1,10 +1,11 @@
 // supabase/functions/cvn-status/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateWorker, AuthenticationError, sha256Hex, hmacSha256Hex, timingSafeEqual } from "../_shared/broker_auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, x-cvn-key-id, content-type",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
 
@@ -12,44 +13,8 @@ const STALE_TIMESTAMP_SECONDS = 300; // 5 min
 
 const CVN_HMAC_SECRET = Deno.env.get("CVN_HMAC_SECRET") ?? "";
 const CVN_BEARER_TOKEN = Deno.env.get("CVN_BEARER_TOKEN") ?? "";
-const AGENT_BROKER_HMAC_SECRET = Deno.env.get("AGENT_BROKER_HMAC_SECRET") ?? "";
-const AGENT_BROKER_BEARER_TOKEN = Deno.env.get("AGENT_BROKER_BEARER_TOKEN") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
-}
-
-async function hmacSha256Hex(body: string, secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-  return Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function sha256Hex(s: string): Promise<string> {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(s),
-  );
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -58,11 +23,7 @@ serve(async (req: Request) => {
   if (req.method !== "GET") {
     return new Response("Method not allowed", { status: 405, headers: corsHeaders });
   }
-  if (
-    !CVN_HMAC_SECRET || !CVN_BEARER_TOKEN || 
-    !AGENT_BROKER_HMAC_SECRET || !AGENT_BROKER_BEARER_TOKEN || 
-    !SUPABASE_URL || !SUPABASE_SERVICE_KEY
-  ) {
+  if (!CVN_HMAC_SECRET || !CVN_BEARER_TOKEN || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.error("Missing required secrets");
     return new Response("Server misconfigured", { status: 500, headers: corsHeaders });
   }
@@ -70,8 +31,6 @@ serve(async (req: Request) => {
   // 1. Parse URL & Path
   const url = new URL(req.url);
   const pathParts = url.pathname.split("/").filter(Boolean);
-  // Expected path format: /functions/v1/cvn-status/<task_id>
-  // pathParts will be ["cvn-status", "<task_id>"]
   const taskId = pathParts[1] ?? "";
   
   if (!taskId || !/^CVN-\d{8}-\d{6}-[A-Z0-9]{4}$/.test(taskId)) {
@@ -99,43 +58,51 @@ serve(async (req: Request) => {
     return new Response("Stale signed_at", { status: 401, headers: corsHeaders });
   }
 
-  // 4. Authenticate Bearer
-  const auth = req.headers.get("authorization") ?? "";
-  let matchedRole: "client" | "worker" | null = null;
-  
-  if (auth.startsWith("Bearer ")) {
-    const token = auth.slice(7);
-    if (timingSafeEqual(token, CVN_BEARER_TOKEN)) {
-      matchedRole = "client";
-    } else if (timingSafeEqual(token, AGENT_BROKER_BEARER_TOKEN)) {
-      matchedRole = "worker";
+  const canonicalString = `GET\n/functions/v1/cvn-status/${taskId}\ntask_id=${taskId}\nsigned_at=${signedAt}\nnonce=${nonce}`;
+
+  // 4. Authenticate Client vs Worker
+  const authHeader = req.headers.get("authorization") ?? "";
+  const keyId = req.headers.get("x-cvn-key-id") ?? "";
+  let principal = null;
+  let isClient = false;
+
+  // If there's no key-id, we must check if it's the client.
+  if (!keyId && authHeader.startsWith("Bearer ")) {
+    const providedBearer = authHeader.slice(7);
+    const providedBearerHash = await sha256Hex(providedBearer);
+    const clientBearerHash = await sha256Hex(CVN_BEARER_TOKEN);
+    
+    if (timingSafeEqual(providedBearerHash, clientBearerHash)) {
+      isClient = true;
+      const signature = req.headers.get("x-cvn-signature") ?? "";
+      const expected = await hmacSha256Hex(canonicalString, CVN_HMAC_SECRET);
+      if (!signature || !timingSafeEqual(signature.toLowerCase(), expected.toLowerCase())) {
+        return new Response("Invalid signature", { status: 401, headers: corsHeaders });
+      }
     }
   }
 
-  if (!matchedRole) {
-    return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+  if (!isClient) {
+    // Attempt worker authentication (will fall back to legacy if no keyId)
+    try {
+      principal = await authenticateWorker(req, canonicalString);
+    } catch (e) {
+      if (e instanceof AuthenticationError) {
+        return new Response(e.message, { status: 401, headers: corsHeaders });
+      }
+      console.error("Authentication check error:", e);
+      return new Response("Internal Server Error", { status: 500, headers: corsHeaders });
+    }
   }
 
-  // 5. Verify Signature over Canonical String
-  // Canonical string: GET\n/functions/v1/cvn-status/<task_id>\ntask_id=<task_id>\nsigned_at=<signed_at>\nnonce=<nonce>
-  const canonicalString = `GET\n/functions/v1/cvn-status/${taskId}\ntask_id=${taskId}\nsigned_at=${signedAt}\nnonce=${nonce}`;
-  const signature = req.headers.get("x-cvn-signature") ?? "";
-  
-  const secret = matchedRole === "client" ? CVN_HMAC_SECRET : AGENT_BROKER_HMAC_SECRET;
-  const expected = await hmacSha256Hex(canonicalString, secret);
-
-  if (!signature || !timingSafeEqual(signature.toLowerCase(), expected)) {
-    return new Response("Invalid signature", { status: 401, headers: corsHeaders });
-  }
-
-  // 6. Nonce replay protection
+  // 5. Nonce replay protection
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const requestHash = await sha256Hex(canonicalString);
   const { error: nonceError } = await supabase
     .from("cvn_processed_nonces")
     .insert({
       nonce: nonce,
-      worker_id: matchedRole,
+      worker_id: isClient ? "client" : principal?.key_id,
       endpoint: "cvn-status",
       signed_at: signedAt,
       request_hash: requestHash
@@ -151,7 +118,7 @@ serve(async (req: Request) => {
     console.error("Nonce tracking error:", nonceError);
   }
 
-  // 7. Query Task (withhold sensitive payload)
+  // 6. Query Task (withhold sensitive payload)
   const { data: task, error } = await supabase
     .from("cvn_tasks")
     .select("task_id, status, target_agent, created_at, claimed_at, completed_at, failed_at, retry_count, result_summary, error_message, error_code")
@@ -171,6 +138,16 @@ serve(async (req: Request) => {
       status: 404,
       headers: { ...corsHeaders, "content-type": "application/json" }
     });
+  }
+
+  // 7. Authorize worker
+  if (!isClient && principal) {
+    if (!principal.allowed_targets.includes(task.target_agent)) {
+      return new Response(JSON.stringify({ error: "unauthorized_target" }), {
+        status: 403,
+        headers: { ...corsHeaders, "content-type": "application/json" }
+      });
+    }
   }
 
   return new Response(JSON.stringify(task), {

@@ -58,6 +58,7 @@ def resolve_urls() -> Dict[str, str]:
 
 AGENT_BROKER_BEARER_TOKEN = os.getenv("AGENT_BROKER_BEARER_TOKEN") or get_secret("agent_broker_bearer_token")
 AGENT_BROKER_HMAC_SECRET = os.getenv("AGENT_BROKER_HMAC_SECRET") or get_secret("agent_broker_hmac_secret")
+AGENT_BROKER_KEY_ID = os.getenv("AGENT_BROKER_KEY_ID")
 
 if not AGENT_BROKER_BEARER_TOKEN or not AGENT_BROKER_HMAC_SECRET:
     print("[-] CRITICAL credential/configuration error: Worker secrets not found.")
@@ -74,6 +75,8 @@ def make_signed_post(url: str, payload: Dict[str, Any]) -> requests.Response:
         "x-cvn-signature": sig,
         "Content-Type": "application/json"
     }
+    if AGENT_BROKER_KEY_ID:
+        headers["x-cvn-key-id"] = AGENT_BROKER_KEY_ID
     return requests.post(url, data=body_bytes, headers=headers, timeout=10.0)
 
 def complete_task(task_id: str, summary: str) -> None:

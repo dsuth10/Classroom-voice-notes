@@ -8,7 +8,16 @@ This document defines the formal boundary and API contract between the Classroom
 
 All communication with the broker is conducted over HTTPS using Edge Functions. Task bodies and response payloads conform to the versioned envelopes below.
 
-### 1.1. CVN Task Submission (Client Envelope)
+### 1.1. Authentication Headers
+
+All requests made by workers (Claim, Complete, Fail) must include the following headers:
+- `Authorization`: `Bearer <credential>`
+- `x-cvn-signature`: HMAC SHA-256 signature over the request body (or canonical URL string for GET requests).
+- `x-cvn-key-id`: The unique worker key identifier issued during credential provisioning.
+
+If `x-cvn-key-id` is omitted, the broker falls back to legacy shared-credential authentication (deprecated).
+
+### 1.2. CVN Task Submission (Client Envelope)
 * **Endpoint:** `POST /functions/v1/cvn-submit-task`
 * **Schema Version:** `cvn.agent_task.v1`
 * **JSON Structure:**

@@ -1,83 +1,65 @@
 // supabase/functions/cvn-complete-task/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateWorker, AuthenticationError, sha256Hex } from "../_shared/broker_auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, x-cvn-key-id, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 const STALE_TIMESTAMP_SECONDS = 300; // 5 min
+const MAX_BODY_SIZE_BYTES = 20 * 1024; // 20KB
 const MAX_RESULT_SUMMARY_LENGTH = 1000;
 
-const AGENT_BROKER_HMAC_SECRET = Deno.env.get("AGENT_BROKER_HMAC_SECRET") ?? "";
-const AGENT_BROKER_BEARER_TOKEN = Deno.env.get("AGENT_BROKER_BEARER_TOKEN") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
-}
-
-async function hmacSha256Hex(body: string, secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-  return Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function sha256Hex(s: string): Promise<string> {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(s),
-  );
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
+
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405, headers: corsHeaders });
   }
-  if (!AGENT_BROKER_HMAC_SECRET || !AGENT_BROKER_BEARER_TOKEN || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-    console.error("Missing required secrets");
+
+  const contentType = req.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    return new Response("Unsupported Media Type", { status: 415, headers: corsHeaders });
+  }
+
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+    console.error("Missing required Supabase secrets");
     return new Response("Server misconfigured", { status: 500, headers: corsHeaders });
   }
 
-  // 1. Bearer Token Auth
-  const auth = req.headers.get("authorization") ?? "";
-  if (!auth.startsWith("Bearer ") || !timingSafeEqual(auth.slice(7), AGENT_BROKER_BEARER_TOKEN)) {
-    return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+  // Enforce size limit and read exact body once
+  let body: string;
+  try {
+    const buf = await req.arrayBuffer();
+    if (buf.byteLength > MAX_BODY_SIZE_BYTES) {
+      return new Response("Payload Too Large", { status: 413, headers: corsHeaders });
+    }
+    body = new TextDecoder().decode(buf);
+  } catch (e) {
+    return new Response("Error reading body", { status: 400, headers: corsHeaders });
   }
 
-  const body = await req.text();
-
-  // 2. HMAC verify
-  const signature = req.headers.get("x-cvn-signature") ?? "";
-  const expected = await hmacSha256Hex(body, AGENT_BROKER_HMAC_SECRET);
-  if (!signature || !timingSafeEqual(signature.toLowerCase(), expected)) {
-    return new Response("Invalid signature", { status: 401, headers: corsHeaders });
+  // Authenticate before parsing business fields
+  let principal;
+  try {
+    principal = await authenticateWorker(req, body);
+  } catch (e) {
+    if (e instanceof AuthenticationError) {
+      return new Response(e.message, { status: 401, headers: corsHeaders });
+    }
+    console.error("Authentication check error:", e);
+    return new Response("Internal Server Error", { status: 500, headers: corsHeaders });
   }
 
-  // 3. Parse JSON
+  // Parse JSON
   let payload: any;
   try {
     payload = JSON.parse(body);
@@ -85,7 +67,7 @@ serve(async (req: Request) => {
     return new Response("Invalid JSON", { status: 400, headers: corsHeaders });
   }
 
-  // 4. Validate parameters
+  // Validate parameters
   if (typeof payload?.task_id !== "string" || payload.task_id.length === 0) {
     return new Response(JSON.stringify({ error: "missing_task_id" }), {
       status: 400,
@@ -106,7 +88,17 @@ serve(async (req: Request) => {
     });
   }
 
-  // 5. Stale timestamp check
+  // Authorize worker ID constraint if not legacy
+  if (!principal.legacy && principal.allowed_worker_ids.length > 0) {
+    if (!principal.allowed_worker_ids.includes(payload.worker_id)) {
+      return new Response(JSON.stringify({ error: "unauthorized_worker_id" }), {
+        status: 403,
+        headers: { ...corsHeaders, "content-type": "application/json" }
+      });
+    }
+  }
+
+  // Stale timestamp check
   const signedAtMs = Date.parse(payload.signed_at);
   if (isNaN(signedAtMs)) {
     return new Response("Invalid signed_at", { status: 400, headers: corsHeaders });
@@ -116,7 +108,7 @@ serve(async (req: Request) => {
     return new Response("Stale signed_at", { status: 401, headers: corsHeaders });
   }
 
-  // 6. Nonce replay protection
+  // Nonce replay protection
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const requestHash = await sha256Hex(body);
   const { error: nonceError } = await supabase
@@ -139,11 +131,12 @@ serve(async (req: Request) => {
     console.error("Nonce tracking error:", nonceError);
   }
 
-  // 7. Atomic DB Complete
+  // Atomic DB Complete with allowed_targets
   const { data, error } = await supabase.rpc("cvn_complete_task", {
     p_task_id: payload.task_id,
     p_worker_id: payload.worker_id,
-    p_result_summary: payload.result_summary
+    p_result_summary: payload.result_summary,
+    p_allowed_targets: principal.allowed_targets
   });
 
   if (error) {
@@ -160,6 +153,8 @@ serve(async (req: Request) => {
     let status = 400;
     if (errCode === "task_claimed_by_another_worker") {
       status = 409;
+    } else if (errCode === "unauthorized_target") {
+      status = 403;
     }
     return new Response(JSON.stringify({ error: errCode }), {
       status: status,
