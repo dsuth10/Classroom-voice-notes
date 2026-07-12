@@ -30,17 +30,17 @@ CVN_ALLOW_PRODUCTION_WORKER = os.getenv("CVN_ALLOW_PRODUCTION_WORKER", "false").
 
 class BrokerWorker:
     """Production broker worker that claims and processes target-specific tasks."""
-    
+
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        
+
         self.key_id = os.getenv("AGENT_BROKER_KEY_ID")
         self.worker_id = os.getenv("CVN_WORKER_ID")
         self.target_agent = os.getenv("CVN_TARGET_AGENT")
-        
+
         # Determine if we are running as the VPS worker (where key_id is vps-worker-staging)
         is_vps_worker = (self.key_id == "vps-worker-staging")
-        
+
         if self.target_agent == "openclaw" or is_vps_worker:
             broker_env = os.getenv("CVN_BROKER_ENV", "").strip()
             if broker_env != "staging":
@@ -60,20 +60,20 @@ class BrokerWorker:
             if not self.worker_id:
                 # Default to randomized worker ID if not set for backward compatibility
                 self.worker_id = f"openclaw-worker-{secrets.token_hex(4)}"
-                
+
         if self.target_agent not in ("openclaw", "hermes"):
             raise RuntimeError(f"Target agent '{self.target_agent}' is not supported. Must be 'openclaw' or 'hermes'.")
-            
+
         # Validate gateway URL - accept only loopback or Unix sockets
         if self.target_agent == "openclaw":
             from urllib.parse import urlparse
             gateway_url = self.config.get("openclaw", {}).get("gateway_url")
             if not gateway_url:
                 raise RuntimeError("Missing gateway URL in configuration")
-            
+
             parsed = urlparse(gateway_url)
             scheme = parsed.scheme.lower() if parsed.scheme else ""
-            
+
             if scheme in ("http+unix", "unix"):
                 # Unix sockets are explicitly supported loopbacks
                 pass
@@ -86,15 +86,15 @@ class BrokerWorker:
                     )
             else:
                 raise RuntimeError(f"Gateway URL '{gateway_url}' has an unsupported scheme or is malformed.")
-            
+
         # Verify broker URLs do not target production
         urls = self.resolve_urls()
         for name, url in urls.items():
             if "ukqkkgzimhtjhlnmlyao" not in url:
                 raise RuntimeError(f"Broker URL for {name} does not target staging: {url}")
-                
+
         self.running = False
-        
+
         # Resolve secrets
         self.bearer_token = self._resolve_secret(
             "AGENT_BROKER_BEARER_TOKEN",
@@ -106,7 +106,7 @@ class BrokerWorker:
             "AGENT_BROKER_HMAC_SECRET_FILE",
             "agent_broker_hmac_secret"
         )
-        
+
         if self.target_agent == "openclaw":
             self.gateway_token = self._resolve_secret(
                 "OPENCLAW_GATEWAY_TOKEN",
@@ -115,7 +115,7 @@ class BrokerWorker:
             )
         else:
             self.gateway_token = ""
-            
+
     def _resolve_secret(self, direct_var: str, file_var: str, keyring_ref: str) -> str:
         """Resolves secrets using systemd credential files, env variables, or keyring fallback."""
         # 1. Try file-based secret (systemd LoadCredential)
@@ -126,12 +126,12 @@ class BrokerWorker:
                     return f.read().strip()
             except Exception as e:
                 raise RuntimeError(f"Failed to read secret from file path '{file_path}' (from {file_var}): {e}")
-                
+
         # 2. Try direct environment variable
         direct_val = os.getenv(direct_var)
         if direct_val:
             return direct_val
-            
+
         # 3. Try keyring fallback (local development)
         try:
             from app.config.keyring_store import get_secret
@@ -140,7 +140,7 @@ class BrokerWorker:
                 return val
         except Exception:
             pass
-            
+
         raise RuntimeError(f"Missing required secret configuration: {direct_var} or {file_var}")
 
     def resolve_urls(self) -> Dict[str, str]:
@@ -148,7 +148,7 @@ class BrokerWorker:
             ref = "slvzyasosjiteimonzen"
         else:
             ref = "ukqkkgzimhtjhlnmlyao"
-            
+
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scratch", "network_config.json")
         if os.path.exists(config_path):
             try:
@@ -164,7 +164,7 @@ class BrokerWorker:
             "fail": f"{base}/cvn-fail-task",
             "status": f"{base}/cvn-status"
         }
-        
+
     def make_signed_post(self, url: str, payload: Dict[str, Any]) -> requests.Response:
         body_str = json.dumps(payload, separators=(",", ":"))
         body_bytes = body_str.encode("utf-8")
@@ -177,7 +177,7 @@ class BrokerWorker:
         if self.key_id:
             headers["x-cvn-key-id"] = self.key_id
         return requests.post(url, data=body_bytes, headers=headers, timeout=15.0)
-        
+
     def complete_task(self, task_id: str, summary: str) -> bool:
         now = datetime.datetime.now(datetime.timezone.utc)
         payload = {
@@ -198,7 +198,7 @@ class BrokerWorker:
         except Exception as e:
             print(f"[-] Network error completing task {task_id}: {e}")
             return False
-            
+
     def fail_task(self, task_id: str, error_msg: str, error_code: str, disposition: str) -> bool:
         now = datetime.datetime.now(datetime.timezone.utc)
         payload = {
@@ -223,15 +223,15 @@ class BrokerWorker:
         except Exception as e:
             print(f"[-] Network error submitting failure for task {task_id}: {e}")
             return False
-            
+
     def process_claimed_task(self, task_id: str, target_agent: str, payload: Dict[str, Any]) -> None:
         # 1. Verify routing
         if target_agent != "openclaw":
             print(f"[-] CRITICAL PROTOCOL ERROR: Worker claimed a non-matching task target '{target_agent}'. Leaving unclaimed.")
             return
-            
+
         adapter = OpenClawAdapter(self.config.get("openclaw", {}), self.gateway_token)
-        
+
         # 2. Validate task envelope & type
         try:
             adapter.validate_task(payload)
@@ -243,7 +243,7 @@ class BrokerWorker:
             print(f"[-] Transient validation failure on task {task_id}: {e}")
             self.fail_task(task_id, str(e), "VALIDATION_FAILED", "retryable")
             return
-            
+
         # 3. Convert task
         try:
             request = adapter.convert_task(payload)
@@ -251,7 +251,7 @@ class BrokerWorker:
             print(f"[-] Failed to convert task payload: {e}")
             self.fail_task(task_id, f"Conversion error: {str(e)}", "CONVERSION_ERROR", "permanent")
             return
-            
+
         # 4. Execute through OpenClaw loopback
         timeout = self.config.get("openclaw", {}).get("normal_timeout_seconds", 120)
         try:
@@ -279,7 +279,7 @@ class BrokerWorker:
             print(f"[-] Unexpected error executing task {task_id}: {e}")
             self.fail_task(task_id, str(e), "UNEXPECTED_EXECUTION_ERROR", "retryable")
             return
-            
+
         # 5. Validate and sanitise response
         try:
             sanitised_result = adapter.validate_response(response)
@@ -291,10 +291,10 @@ class BrokerWorker:
             print(f"[-] Unexpected error validating response for task {task_id}: {e}")
             self.fail_task(task_id, str(e), "UNEXPECTED_VALIDATION_ERROR", "permanent")
             return
-            
+
         # 6. Complete task
         self.complete_task(task_id, sanitised_result["result_summary"])
-        
+
     def poll_and_process(self) -> None:
         urls = self.resolve_urls()
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -305,41 +305,41 @@ class BrokerWorker:
             "signed_at": now.isoformat(),
             "nonce": secrets.token_hex(16)
         }
-        
+
         try:
             print(f"[+] Polling {urls['claim']}...")
             res = self.make_signed_post(urls["claim"], claim_payload)
-            
+
             if res.status_code in (401, 403):
                 print(f"[-] CRITICAL: HTTP {res.status_code} Unauthorized. Stopping worker.")
                 self.running = False
                 return
-                
+
             if res.status_code != 200:
                 print(f"[-] Claim request returned status {res.status_code}. Backing off.")
                 self.apply_backoff()
                 return
-                
+
             self.backoff_count = 0  # reset backoff on success
-            
+
             data = res.json()
             if not data.get("claimed"):
                 print("[-] No pending tasks in queue.")
                 return
-                
+
             task_id = data["task_id"]
             target_agent = data["target_agent"]
             payload = data["payload"]
-            
+
             print(f"[+] CLAIMED TASK: {task_id}")
             self.process_claimed_task(task_id, target_agent, payload)
-            
+
         except requests.exceptions.RequestException as e:
             print(f"[-] Supabase network/timeout error: {e}")
             self.apply_backoff()
         except Exception as e:
             print(f"[-] Unexpected error in worker loop: {e}")
-            
+
     def apply_backoff(self) -> None:
         self.backoff_count = getattr(self, "backoff_count", 0) + 1
         sec = min(30, 2 ** self.backoff_count)
@@ -347,13 +347,13 @@ class BrokerWorker:
         total = sec + jitter
         print(f"[-] Backing off for {total:.2f} seconds...")
         time.sleep(total)
-        
+
     def run(self) -> None:
         print(f"[+] Worker {self.worker_id} initialised (env: {CVN_BROKER_ENV}).")
         self.running = True
         self.backoff_count = 0
         poll_interval = int(self.config.get("poll_interval_seconds", 5))
-        
+
         while self.running:
             try:
                 self.poll_and_process()
@@ -365,5 +365,5 @@ class BrokerWorker:
             except Exception as e:
                 print(f"[-] Worker error loop handler: {e}")
                 time.sleep(poll_interval)
-                
+
         print(f"[+] Worker {self.worker_id} stopped cleanly.")

@@ -18,22 +18,22 @@ class FakeGatewayHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Suppress logging to keep test output clean
         pass
-        
+
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8')
         req_data = json.loads(body)
-        
+
         prompt = req_data.get("input", "")
-        
+
         if "simulate_delay" in prompt:
             # Simulate a read timeout
             time.sleep(2.0)
-            
+
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.end_headers()
-        
+
         resp = {
             "output": f"Echo: {prompt}"
         }
@@ -47,7 +47,7 @@ class TestOpenClawAdapterFakeGateway(unittest.TestCase):
         s.bind(('127.0.0.1', 0))
         cls.port = s.getsockname()[1]
         s.close()
-        
+
         cls.server = http.server.HTTPServer(('127.0.0.1', cls.port), FakeGatewayHandler)
         cls.thread = threading.Thread(target=cls.server.serve_forever)
         cls.thread.daemon = True
@@ -78,7 +78,7 @@ class TestOpenClawAdapterFakeGateway(unittest.TestCase):
         }
         res = self.adapter.execute(req, 5)
         self.assertEqual(res["output"], "Echo: Hello Fake Gateway")
-        
+
         validated = self.adapter.validate_response(res)
         self.assertEqual(validated["result_summary"], "Echo: Hello Fake Gateway")
 
@@ -98,7 +98,7 @@ class TestOpenClawAdapterFakeGateway(unittest.TestCase):
         bad_config = self.config.copy()
         bad_config["gateway_url"] = "http://127.0.0.1:54321"  # Unused port
         bad_adapter = OpenClawAdapter(bad_config, "fake-token")
-        
+
         req = {
             "model": "openclaw/cvn-broker",
             "input": "Hello Unreachable",

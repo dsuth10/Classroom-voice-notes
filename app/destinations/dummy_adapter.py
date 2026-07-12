@@ -11,18 +11,18 @@ from app.worker.errors import (
 
 class DummyAdapter:
     """A dummy task adapter for testing and diagnostics.
-    
+
     Implements the TaskAdapter protocol.
     """
-    
+
     def validate_task(self, task: Dict[str, Any]) -> None:
         if task.get("schema_version") != "cvn.agent_task.v1":
             raise UnsupportedContractVersion(f"Unsupported schema version: {task.get('schema_version')}")
-        
+
         # Check basic envelope structure
         if "task" not in task or "instructions" not in task["task"]:
             raise InvalidTaskPayload("Missing task instructions in payload")
-            
+
     def convert_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         instructions = task["task"]["instructions"]
         # Try to parse instructions as JSON to check if it's a structured test task
@@ -33,12 +33,12 @@ class DummyAdapter:
         except Exception:
             inst_data = {}
         return inst_data
-        
+
     def execute(self, request: Dict[str, Any], timeout_seconds: int) -> Dict[str, Any]:
         task_type = request.get("task_type")
         if task_type == "cvn.test":
             test_mode = request.get("payload", {}).get("test_mode", "success")
-            
+
             if test_mode == "success":
                 time.sleep(1.0)
                 return {"result": "success", "text": "CVN dummy processing successful."}
@@ -54,7 +54,7 @@ class DummyAdapter:
         else:
             time.sleep(1.0)
             return {"result": "success", "text": "Simulated note processing summary."}
-            
+
     def validate_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
         if response.get("result") == "crash":
             import sys

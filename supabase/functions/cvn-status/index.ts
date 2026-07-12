@@ -32,7 +32,7 @@ serve(async (req: Request) => {
   const url = new URL(req.url);
   const pathParts = url.pathname.split("/").filter(Boolean);
   const taskId = pathParts[1] ?? "";
-  
+
   if (!taskId || !/^CVN-\d{8}-\d{6}-[A-Z0-9]{4}$/.test(taskId)) {
     return new Response(JSON.stringify({ error: "missing_task_id" }), {
       status: 400,
@@ -71,7 +71,7 @@ serve(async (req: Request) => {
     const providedBearer = authHeader.slice(7);
     const providedBearerHash = await sha256Hex(providedBearer);
     const clientBearerHash = await sha256Hex(CVN_BEARER_TOKEN);
-    
+
     if (timingSafeEqual(providedBearerHash, clientBearerHash)) {
       isClient = true;
       const signature = req.headers.get("x-cvn-signature") ?? "";

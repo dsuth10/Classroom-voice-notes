@@ -10,7 +10,7 @@ from app.worker.broker_worker import BrokerWorker
 
 def main() -> None:
     print("=== Classroom Voice Notes: Production Broker Worker ===")
-    
+
     config = {
         "poll_interval_seconds": int(os.getenv("CVN_POLL_INTERVAL_SECONDS", "5")),
         "openclaw": {
@@ -24,7 +24,7 @@ def main() -> None:
             "connect_timeout_seconds": float(os.getenv("OPENCLAW_CONNECT_TIMEOUT_SECONDS", "10.0"))
         }
     }
-    
+
     try:
         worker = BrokerWorker(config)
         worker.run()

@@ -1,9 +1,9 @@
 # Phase 2C.1 Staging Verification & Deployment Report
 
-**Project:** Classroom Voice Notes (CVN) Broker  
-**Environment:** Supabase staging only (`ukqkkgzimhtjhlnmlyao`)  
-**Execution Host:** Windows Local Development Machine  
-**Date:** 12 July 2026  
+**Project:** Classroom Voice Notes (CVN) Broker
+**Environment:** Supabase staging only (`ukqkkgzimhtjhlnmlyao`)
+**Execution Host:** Windows Local Development Machine
+**Date:** 12 July 2026
 
 ---
 
@@ -61,7 +61,7 @@ Connecting to remote database...
 Do you want to push these migrations to the remote database?
  • 007_cvn_phase_2c1_auth_extensions.sql
 
- [Y/n] 
+ [Y/n]
 Applying migration 007_cvn_phase_2c1_auth_extensions.sql...
 Finished supabase db push.
 ```
@@ -182,7 +182,7 @@ tests\integration\test_worker_identities.py ..                           [100%]
 - **Timing-Safe Authentication:** Handled in a single-pass buffer read. Signature verification and timing-safe string comparison occur before JSON parsing to prevent DoS or parsing attacks on unauthenticated payloads.
 - **Worker-ID Constraint Enforcement:** `cvn-claim-task`, `cvn-complete-task`, and `cvn-fail-task` strictly validate the `allowed_worker_ids` list. Both cross-worker impersonation scenarios were verified to return `403 Forbidden` and prevent task mutation.
 - **Indistinguishable Probing Prevention:** `cvn-status` returns `403 Forbidden` with a generic `"unauthorized"` error if a task is absent or if a worker is unauthorized. No sensitive data fields (`payload`, `claim_token`, etc.) are returned in queries.
-- **Credential Rotation Integrity:** 
+- **Credential Rotation Integrity:**
   - Verified that unique temporary key ID `test-rotation-worker-01` was used during rotation tests.
   - Verified that permanent Windows and VPS entries remained active.
   - Verified that old credentials return `401` after rotation.

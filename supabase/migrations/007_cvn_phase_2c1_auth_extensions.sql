@@ -67,7 +67,7 @@ BEGIN
 
   -- Update task details
   UPDATE public.cvn_tasks
-  SET 
+  SET
     status = 'completed',
     result_summary = p_result_summary,
     completed_at = now(),
@@ -169,9 +169,9 @@ BEGIN
 
     IF v_retry_count < p_max_retries THEN
       v_new_status := 'pending';
-      
+
       UPDATE public.cvn_tasks
-      SET 
+      SET
         status = v_new_status,
         retry_count = v_retry_count,
         failed_at = now(),
@@ -206,7 +206,7 @@ BEGIN
       v_new_status := 'dead_letter';
 
       UPDATE public.cvn_tasks
-      SET 
+      SET
         status = v_new_status,
         retry_count = v_retry_count,
         failed_at = now(),
@@ -242,7 +242,7 @@ BEGIN
     v_new_status := 'dead_letter';
 
     UPDATE public.cvn_tasks
-    SET 
+    SET
       status = v_new_status,
       failed_at = now(),
       error_message = p_error_message,
@@ -275,7 +275,7 @@ BEGIN
     v_new_status := 'manual_review';
 
     UPDATE public.cvn_tasks
-    SET 
+    SET
       status = v_new_status,
       failed_at = now(),
       error_message = p_error_message,

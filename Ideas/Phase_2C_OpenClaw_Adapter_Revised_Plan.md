@@ -1,9 +1,9 @@
 # Phase 2C: OpenClaw Adapter Design and VPS Integration
 
-**Project:** Classroom Voice Notes (CVN) Broker  
-**Phase:** 2C  
-**Environment:** Staging first  
-**Date:** 10 July 2026  
+**Project:** Classroom Voice Notes (CVN) Broker
+**Phase:** 2C
+**Environment:** Staging first
+**Date:** 10 July 2026
 **Status:** Revised implementation plan — awaiting execution
 
 ## 1. Purpose
@@ -533,4 +533,3 @@ Phase 2C does not include:
 ## 16. Implementation instruction for Antigravity
 
 > Implement Phase 2C against staging using the VPS-hosted architecture in this plan. Keep the Phase 2B dummy worker as a Windows test tool. Create a separate production broker worker and isolated OpenClaw adapter intended to run on the VPS beside OpenClaw. Use the gateway's loopback-only `POST http://127.0.0.1:18789/v1/responses` endpoint and a dedicated restricted `cvn-broker` agent. Preserve routing by logical `target_agent`, use separate VPS credentials, classify post-dispatch timeouts as unknown rather than automatically retryable, and verify the complete Windows CVN → Supabase → VPS worker → OpenClaw → Supabase → CVN path using synthetic content. Do not expose the gateway publicly, enable external-action tools, use real classroom data, deploy to production or merge to `main` without explicit approval.
-

@@ -57,7 +57,7 @@ def check_gateway() -> bool:
     req = urllib.request.Request(gateway_url)
     if token:
         req.add_header("Authorization", f"Bearer {token}")
-        
+
     try:
         # Perform request with a 3.0-second timeout
         with opener.open(req, timeout=3.0) as response:

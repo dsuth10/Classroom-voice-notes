@@ -166,4 +166,3 @@ Workers evaluate task instructions based on domain-oriented task types. When ins
 ### 4.2. Logging and Privacy Restrictions
 - **No Secret Logging:** Workers must never log or output HTTP Authorization headers, HMAC signatures, nonces, or raw credential tokens to console logs or file registries.
 - **Redaction Integrity:** Workers must respect the `privacy` classification and ensure no raw transcript secrets or student identification records are exposed outside the secure enclave boundaries.
-

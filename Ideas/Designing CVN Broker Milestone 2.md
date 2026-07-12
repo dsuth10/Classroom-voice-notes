@@ -4,7 +4,7 @@ Note: _This is purely the output of the chat conversation and does not contain a
 
 ### User Input
 
-@[c:\Users\dsuth\Documents\Code Projects\Classroom voice notes\Ideas\AI_Agent_Integration_Solution.md] I need to continue with this element of the project. 
+@[c:\Users\dsuth\Documents\Code Projects\Classroom voice notes\Ideas\AI_Agent_Integration_Solution.md] I need to continue with this element of the project.
 
 *Viewed [AI_Agent_Integration_Solution.md](file:///c:/Users/dsuth/Documents/Code%20Projects/Classroom%20voice%20notes/Ideas/AI_Agent_Integration_Solution.md) *
 

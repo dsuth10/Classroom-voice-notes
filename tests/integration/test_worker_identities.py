@@ -51,7 +51,7 @@ def make_signed_worker_post(endpoint: str, payload: dict, key_id: str, bearer: s
     }
     if key_id:
         headers["x-cvn-key-id"] = key_id
-        
+
     return requests.post(
         f"{BASE_URL}/{endpoint}",
         data=body_str,
@@ -90,7 +90,7 @@ def make_signed_worker_status_get(task_id: str, key_id: str, bearer: str, hmac_s
     }
     if key_id:
         headers["x-cvn-key-id"] = key_id
-        
+
     return requests.get(
         f"{BASE_URL}/cvn-status/{task_id}",
         params={
@@ -104,12 +104,12 @@ def make_signed_worker_status_get(task_id: str, key_id: str, bearer: str, hmac_s
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for staging tests")
 def test_worker_identities():
     print("\n[*] Starting Phase 2C.1 Worker Identity Authentication Tests...")
-    
+
     # Staging keys
     HERMES_KEY_ID = "test-hermes-worker-01"
     HERMES_BEARER = "fixture_hermes_bearer_1234567890"
     HERMES_HMAC = "fixture_hermes_hmac_secret_1234567890"
-    
+
     OC_KEY_ID = "test-openclaw-worker-01"
     OC_BEARER = "fixture_openclaw_bearer_1234567890"
     OC_HMAC = "fixture_openclaw_hmac_secret_1234567890"
@@ -124,7 +124,7 @@ def test_worker_identities():
 
     # --- 1. Submission of tasks ---
     now = datetime.datetime.now(datetime.timezone.utc)
-    
+
     # 1.1 Hermes task
     hermes_task_id = "CVN-" + now.strftime("%Y%m%d-%H%M%S") + "-HERM"
     submit_hermes = {
@@ -147,7 +147,7 @@ def test_worker_identities():
         "nonce": secrets.token_hex(16),
         "idempotency_key": "idemp-herm-" + secrets.token_hex(8)
     }
-    
+
     res = make_signed_client_post("cvn-submit-task", submit_hermes)
     assert res.status_code == 200, f"Hermes task submit failed: {res.text}"
     print("[+] Hermes task submitted successfully")
@@ -174,13 +174,13 @@ def test_worker_identities():
         "nonce": secrets.token_hex(16),
         "idempotency_key": "idemp-oc-" + secrets.token_hex(8)
     }
-    
+
     res = make_signed_client_post("cvn-submit-task", submit_oc)
     assert res.status_code == 200, f"OpenClaw task submit failed: {res.text}"
     print("[+] OpenClaw task submitted successfully")
 
     # --- 2. Worker ID Authorisation checks ---
-    
+
     # 2.1 Correct key, target and worker ID (should succeed)
     claim_payload = {
         "worker_id": "hermes-test-worker",
@@ -304,7 +304,7 @@ def submit_test_task_for_worker(suffix: str, target_agent: str) -> str:
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for staging tests")
 def test_credential_disable_rotation():
     print("\n[*] Starting Phase 2C.1 Credential Disable & Rotation Tests...")
-    
+
     # We only run this test if targeting staging
     if "ukqkkgzimhtjhlnmlyao" not in BASE_URL:
         print("[*] Skipping staging-only rotation tests (not targeting staging URL)")
@@ -387,7 +387,7 @@ def test_credential_disable_rotation():
     ROT_KEY_ID = "test-rotation-worker-01"
     bearer_1 = "rot_bearer_" + secrets.token_hex(16)
     hmac_1 = "rot_hmac_" + secrets.token_hex(16)
-    
+
     # 2. Setup registry with enabled key
     registry = copy.deepcopy(base_registry)
     registry["keys"][ROT_KEY_ID] = {
@@ -397,13 +397,13 @@ def test_credential_disable_rotation():
         "allowed_targets": ["hermes"],
         "allowed_worker_ids": ["rotation-test-worker"]
     }
-    
+
     print("[*] Test 1: Setting up enabled credential...")
     push_registry(registry)
-    
+
     # Verify enabled credential succeeds
     task_id_1 = submit_test_task_for_worker("rot1", "hermes")
-    
+
     claim_payload = {
         "worker_id": "rotation-test-worker",
         "target_agent": "hermes",
@@ -419,7 +419,7 @@ def test_credential_disable_rotation():
     print("[*] Test 2: Disabling credential...")
     registry["keys"][ROT_KEY_ID]["enabled"] = False
     push_registry(registry)
-    
+
     # Verify disabled credential returns 401
     claim_payload["nonce"] = secrets.token_hex(16)
     claim_payload["signed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -435,14 +435,14 @@ def test_credential_disable_rotation():
     registry["keys"][ROT_KEY_ID]["bearer_token"] = bearer_2
     registry["keys"][ROT_KEY_ID]["hmac_secret"] = hmac_2
     push_registry(registry)
-    
+
     # Verify old credential fails
     claim_payload["nonce"] = secrets.token_hex(16)
     claim_payload["signed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     res = make_signed_worker_post("cvn-claim-task", claim_payload, ROT_KEY_ID, bearer_1, hmac_1)
     assert res.status_code == 401, f"Expected 401 for old credential, got {res.status_code} {res.text}"
     print("[+] Old credential fails after rotation (401)")
-    
+
     # Verify new credential succeeds
     task_id_2 = submit_test_task_for_worker("rot2", "hermes")
     claim_payload["nonce"] = secrets.token_hex(16)
@@ -455,17 +455,17 @@ def test_credential_disable_rotation():
     print("[*] Test 4: Disabling then restoring/re-enabling credential...")
     registry["keys"][ROT_KEY_ID]["enabled"] = False
     push_registry(registry)
-    
+
     # Verify disabled returns 401
     claim_payload["nonce"] = secrets.token_hex(16)
     claim_payload["signed_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     res = make_signed_worker_post("cvn-claim-task", claim_payload, ROT_KEY_ID, bearer_2, hmac_2)
     assert res.status_code == 401
-    
+
     # Re-enable
     registry["keys"][ROT_KEY_ID]["enabled"] = True
     push_registry(registry)
-    
+
     # Verify restored succeeds
     task_id_3 = submit_test_task_for_worker("rot3", "hermes")
     claim_payload["nonce"] = secrets.token_hex(16)
@@ -521,7 +521,7 @@ def test_credential_disable_rotation():
     # 9. Post-restoration verification that permanent VPS staging worker credential succeeds
     if vps_bearer and vps_hmac:
         print("[*] Test 8: Verifying permanent VPS staging credential after cleanup...")
-        task_id_vps = submit_test_task_for_worker("vps-test", "openclaw")
+        task_id_vps = submit_test_task_for_worker("VPST", "openclaw")
         claim_payload_vps = {
             "worker_id": "vps-worker-id-staging",
             "target_agent": "openclaw",

@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS public.cvn_processed_nonces (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_cvn_processed_nonces_signed_at 
+CREATE INDEX IF NOT EXISTS idx_cvn_processed_nonces_signed_at
   ON public.cvn_processed_nonces(signed_at);
 
 -- RLS for nonces table: service_role can read/write
@@ -48,7 +48,7 @@ DECLARE
   v_reaped_count INT := 0;
 BEGIN
   -- Find stale claimed tasks where expires_at has passed
-  FOR v_task IN 
+  FOR v_task IN
     SELECT task_id, retry_count, claimed_by, queue_msg_id
     FROM public.cvn_tasks
     WHERE status IN ('claimed', 'running') AND expires_at < now()
@@ -60,7 +60,7 @@ BEGIN
     IF v_task.retry_count < p_max_retries THEN
       -- Requeue: status back to pending, clear worker info, set VT to 0
       UPDATE public.cvn_tasks
-      SET 
+      SET
         status = 'pending',
         retry_count = v_task.retry_count,
         claimed_by = NULL,
@@ -90,7 +90,7 @@ BEGIN
     ELSE
       -- Move to dead letter
       UPDATE public.cvn_tasks
-      SET 
+      SET
         status = 'dead_letter',
         retry_count = v_task.retry_count,
         claimed_by = NULL,
@@ -158,17 +158,17 @@ BEGIN
   DELETE FROM public.cvn_processed_nonces WHERE signed_at < now() - INTERVAL '5 minutes';
 
   -- 2. Read one message from PGMQ
-  SELECT msg_id, message 
-  FROM pgmq.read('cvn_tasks_queue', p_vt_seconds, 1) 
+  SELECT msg_id, message
+  FROM pgmq.read('cvn_tasks_queue', p_vt_seconds, 1)
   LIMIT 1
   INTO v_msg_id, v_message;
 
   IF v_msg_id IS NULL THEN
-    RETURN QUERY SELECT 
-      NULL::TEXT, 
-      NULL::TEXT, 
-      NULL::cvn_task_status, 
-      NULL::JSONB, 
+    RETURN QUERY SELECT
+      NULL::TEXT,
+      NULL::TEXT,
+      NULL::cvn_task_status,
+      NULL::JSONB,
       FALSE;
     RETURN;
   END IF;
@@ -185,11 +185,11 @@ BEGIN
   IF v_status IS NULL THEN
     -- Task row missing, clean queue message
     PERFORM pgmq.delete('cvn_tasks_queue', v_msg_id);
-    RETURN QUERY SELECT 
-      NULL::TEXT, 
-      NULL::TEXT, 
-      NULL::cvn_task_status, 
-      NULL::JSONB, 
+    RETURN QUERY SELECT
+      NULL::TEXT,
+      NULL::TEXT,
+      NULL::cvn_task_status,
+      NULL::JSONB,
       FALSE;
     RETURN;
   END IF;
@@ -197,18 +197,18 @@ BEGIN
   -- If completed, cancelled, or dead-letter, remove from queue and claim nothing
   IF v_status IN ('completed', 'cancelled', 'dead_letter') THEN
     PERFORM pgmq.delete('cvn_tasks_queue', v_msg_id);
-    RETURN QUERY SELECT 
-      NULL::TEXT, 
-      NULL::TEXT, 
-      NULL::cvn_task_status, 
-      NULL::JSONB, 
+    RETURN QUERY SELECT
+      NULL::TEXT,
+      NULL::TEXT,
+      NULL::cvn_task_status,
+      NULL::JSONB,
       FALSE;
     RETURN;
   END IF;
 
   -- 4. Update task details
   UPDATE public.cvn_tasks
-  SET 
+  SET
     status = 'claimed',
     claimed_by = p_worker_id,
     claimed_at = now(),
@@ -230,11 +230,11 @@ BEGIN
     )
   );
 
-  RETURN QUERY SELECT 
-    v_task_id, 
-    v_target_agent, 
-    'claimed'::cvn_task_status, 
-    v_payload_json, 
+  RETURN QUERY SELECT
+    v_task_id,
+    v_target_agent,
+    'claimed'::cvn_task_status,
+    v_payload_json,
     TRUE;
 END;
 $$;
@@ -292,7 +292,7 @@ BEGIN
 
   -- Update task details
   UPDATE public.cvn_tasks
-  SET 
+  SET
     status = 'completed',
     result_summary = p_result_summary,
     completed_at = now(),
@@ -372,9 +372,9 @@ BEGIN
   IF v_retry_count < p_max_retries THEN
     -- Requeue: status back to pending, clear worker details, set message visible
     v_new_status := 'pending';
-    
+
     UPDATE public.cvn_tasks
-    SET 
+    SET
       status = v_new_status,
       retry_count = v_retry_count,
       failed_at = now(),
@@ -407,7 +407,7 @@ BEGIN
     v_new_status := 'dead_letter';
 
     UPDATE public.cvn_tasks
-    SET 
+    SET
       status = v_new_status,
       retry_count = v_retry_count,
       failed_at = now(),

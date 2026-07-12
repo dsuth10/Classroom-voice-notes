@@ -1,12 +1,12 @@
 # Phase 2C.2 Developer Investigation and Implementation Instructions
 
-**Project:** Classroom Voice Notes (CVN) Broker  
-**Audience:** Developer with no prior knowledge of the project  
-**Environment in scope:** Supabase staging and the OpenClaw VPS only  
-**Staging project reference:** `ukqkkgzimhtjhlnmlyao`  
-**Current feature branch:** `feature/phase-2c2-vps-staging-worker`  
-**Reported candidate commit:** `5f7a7c190a28a2989f0defa2419cf3b981bb37b8`  
-**Production changes:** Not authorised  
+**Project:** Classroom Voice Notes (CVN) Broker
+**Audience:** Developer with no prior knowledge of the project
+**Environment in scope:** Supabase staging and the OpenClaw VPS only
+**Staging project reference:** `ukqkkgzimhtjhlnmlyao`
+**Current feature branch:** `feature/phase-2c2-vps-staging-worker`
+**Reported candidate commit:** `5f7a7c190a28a2989f0defa2419cf3b981bb37b8`
+**Production changes:** Not authorised
 
 ---
 

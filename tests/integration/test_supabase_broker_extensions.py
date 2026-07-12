@@ -67,7 +67,7 @@ def get_task_status(task_id: str) -> dict:
     nonce = secrets.token_hex(16)
     canonical = f"GET\n/functions/v1/cvn-status/{task_id}\ntask_id={task_id}\nsigned_at={signed_at}\nnonce={nonce}"
     sig = hmac_sha256_hex(canonical, CLIENT_HMAC)
-    
+
     res = requests.get(
         f"{BASE_URL}/cvn-status/{task_id}",
         params={
@@ -87,7 +87,7 @@ def get_task_status(task_id: str) -> dict:
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for staging tests")
 def test_broker_extensions():
     print("\n[*] Starting Phase 2C.0 Broker Extensions Staging Tests...")
-    
+
     # 1. Submit an 'openclaw' task
     now = datetime.datetime.now(datetime.timezone.utc)
     task_id = "CVN-" + now.strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2).upper()
@@ -111,11 +111,11 @@ def test_broker_extensions():
         "nonce": secrets.token_hex(16),
         "idempotency_key": "key-" + secrets.token_hex(8)
     }
-    
+
     print(f"[*] Submitting openclaw task {task_id}...")
     res = make_signed_client_post("cvn-submit-task", submit_payload)
     assert res.status_code == 200, f"Submit failed: {res.text}"
-    
+
     # 2. Try to claim as a 'hermes' worker. It should NOT claim it.
     print("[*] Worker polling for hermes targets...")
     claim_payload = {
@@ -133,7 +133,7 @@ def test_broker_extensions():
         print("[+] Claimed another pending task, but successfully avoided claiming OpenClaw task.")
     else:
         print("[+] Verified: Hermes worker did not claim OpenClaw task.")
-    
+
     # 3. Claim as an 'openclaw' worker. It should claim it.
     print("[*] Worker polling for openclaw targets...")
     claim_payload["target_agent"] = "openclaw"
@@ -152,7 +152,7 @@ def test_broker_extensions():
     assert data["task_id"] == task_id
     assert data["target_agent"] == "openclaw"
     print("[+] Verified: OpenClaw worker successfully claimed OpenClaw task.")
-    
+
     # 4. Fail task with 'disposition: permanent'
     print("[*] Submitting permanent failure...")
     fail_payload = {
@@ -178,7 +178,7 @@ def test_broker_extensions():
     assert fail_res["success"] is True
     assert fail_res["status"] == "dead_letter"
     print("[+] Verified: Permanent failure transition status: dead_letter.")
-    
+
     # Verify status and error_code
     status_data = get_task_status(task_id)
     assert status_data["status"] == "dead_letter"
@@ -191,11 +191,11 @@ def test_broker_extensions():
     submit_payload["task_id"] = task_id2
     submit_payload["idempotency_key"] = "key-" + secrets.token_hex(8)
     submit_payload["nonce"] = secrets.token_hex(16)
-    
+
     print(f"[*] Submitting second task {task_id2}...")
     res = make_signed_client_post("cvn-submit-task", submit_payload)
     assert res.status_code == 200
-    
+
     # Claim it
     claim_payload["nonce"] = secrets.token_hex(16)
     res = make_signed_worker_post(
@@ -207,7 +207,7 @@ def test_broker_extensions():
     )
     assert res.status_code == 200
     assert res.json()["claimed"] is True
-    
+
     # Fail with execution_unknown
     print("[*] Submitting execution_unknown failure...")
     fail_payload2 = {
@@ -233,13 +233,13 @@ def test_broker_extensions():
     assert fail_res2["success"] is True
     assert fail_res2["status"] == "manual_review"
     print("[+] Verified: Execution unknown failure transitions status to manual_review.")
-    
+
     # Verify status and error_code
     status_data2 = get_task_status(task_id2)
     assert status_data2["status"] == "manual_review"
     assert status_data2["error_code"] == "EXECUTION_TIMEOUT_UNKNOWN"
     print("[+] Verified: Status endpoint returned manual_review and correct error_code.")
-    
+
     print("[+] ALL Phase 2C.0 Broker Extensions staging tests passed!")
 
 if __name__ == "__main__":

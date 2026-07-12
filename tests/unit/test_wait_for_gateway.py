@@ -7,16 +7,16 @@ import urllib.error
 import io
 
 class TestWaitForGateway(unittest.TestCase):
-    
+
     def setUp(self):
         # Prevent actually calling time.sleep in tests to speed them up
         self.sleep_patcher = patch("time.sleep")
         self.mock_sleep = self.sleep_patcher.start()
-        
+
         # Clean environment variables
         self.original_token_file = os.environ.get("OPENCLAW_GATEWAY_TOKEN_FILE")
         os.environ["OPENCLAW_GATEWAY_TOKEN_FILE"] = "/fake/token/path"
-        
+
     def tearDown(self):
         self.sleep_patcher.stop()
         if self.original_token_file is None:
@@ -31,7 +31,7 @@ class TestWaitForGateway(unittest.TestCase):
     def test_successful_response(self, mock_build_opener, mock_file, mock_getsize, mock_exists):
         mock_exists.return_value = True
         mock_getsize.return_value = 14
-        
+
         # Mock opener and its response
         mock_opener = MagicMock()
         mock_response = MagicMock()
@@ -39,10 +39,10 @@ class TestWaitForGateway(unittest.TestCase):
         mock_response.read.return_value = b'{"object": "list", "data": [{"id": "openclaw/cvn-broker"}]}'
         mock_opener.open.return_value.__enter__.return_value = mock_response
         mock_build_opener.return_value = mock_opener
-        
+
         import deploy.wait_for_gateway as wait_script
         self.assertTrue(wait_script.check_gateway())
-        
+
         # Verify that the build_opener was called and Authorization header was set
         mock_build_opener.assert_called_once()
         args, _ = mock_opener.open.call_args
@@ -53,12 +53,12 @@ class TestWaitForGateway(unittest.TestCase):
     @patch("urllib.request.build_opener")
     def test_gateway_unavailable(self, mock_build_opener, mock_exists):
         mock_exists.return_value = False
-        
+
         # Mock connection refused
         mock_opener = MagicMock()
         mock_opener.open.side_effect = urllib.error.URLError("Connection refused")
         mock_build_opener.return_value = mock_opener
-        
+
         import deploy.wait_for_gateway as wait_script
         self.assertFalse(wait_script.check_gateway())
 
@@ -66,13 +66,13 @@ class TestWaitForGateway(unittest.TestCase):
     @patch("urllib.request.build_opener")
     def test_timeout(self, mock_build_opener, mock_exists):
         mock_exists.return_value = False
-        
+
         # Mock read timeout
         mock_opener = MagicMock()
         import socket
         mock_opener.open.side_effect = socket.timeout("timed out")
         mock_build_opener.return_value = mock_opener
-        
+
         import deploy.wait_for_gateway as wait_script
         self.assertFalse(wait_script.check_gateway())
 
@@ -80,7 +80,7 @@ class TestWaitForGateway(unittest.TestCase):
     @patch("urllib.request.build_opener")
     def test_authentication_rejection(self, mock_build_opener, mock_exists):
         mock_exists.return_value = False
-        
+
         # Mock 401 error
         mock_opener = MagicMock()
         mock_opener.open.side_effect = urllib.error.HTTPError(
@@ -91,7 +91,7 @@ class TestWaitForGateway(unittest.TestCase):
             fp=None
         )
         mock_build_opener.return_value = mock_opener
-        
+
         import deploy.wait_for_gateway as wait_script
         self.assertFalse(wait_script.check_gateway())
 
@@ -99,7 +99,7 @@ class TestWaitForGateway(unittest.TestCase):
     @patch("urllib.request.build_opener")
     def test_5xx_rejected(self, mock_build_opener, mock_exists):
         mock_exists.return_value = False
-        
+
         # Mock 500 error
         mock_opener = MagicMock()
         mock_opener.open.side_effect = urllib.error.HTTPError(
@@ -110,7 +110,7 @@ class TestWaitForGateway(unittest.TestCase):
             fp=None
         )
         mock_build_opener.return_value = mock_opener
-        
+
         import deploy.wait_for_gateway as wait_script
         self.assertFalse(wait_script.check_gateway())
 
@@ -118,7 +118,7 @@ class TestWaitForGateway(unittest.TestCase):
     @patch("urllib.request.build_opener")
     def test_404_rejected(self, mock_build_opener, mock_exists):
         mock_exists.return_value = False
-        
+
         # Mock 404 error
         mock_opener = MagicMock()
         mock_opener.open.side_effect = urllib.error.HTTPError(
@@ -129,7 +129,7 @@ class TestWaitForGateway(unittest.TestCase):
             fp=None
         )
         mock_build_opener.return_value = mock_opener
-        
+
         import deploy.wait_for_gateway as wait_script
         self.assertFalse(wait_script.check_gateway())
 
@@ -148,7 +148,7 @@ class TestWaitForGateway(unittest.TestCase):
         mock_exists.return_value = True
         mock_getsize.return_value = 100
         mock_open_func.side_effect = PermissionError("Permission denied")
-        
+
         import deploy.wait_for_gateway as wait_script
         with patch("urllib.request.build_opener") as mock_build_opener:
             self.assertFalse(wait_script.check_gateway())

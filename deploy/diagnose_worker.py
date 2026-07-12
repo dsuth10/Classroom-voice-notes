@@ -28,19 +28,19 @@ def test_http_get(url: str, headers: Optional[Dict[str, str]] = None, timeout: f
 
 def main() -> None:
     print("=== Classroom Voice Notes: VPS Staging Worker Diagnostics ===")
-    
+
     # 1. Environment Variable Check
     print_section("1. Environment Configuration")
     broker_env = os.getenv("CVN_BROKER_ENV", "").strip()
     worker_id = os.getenv("CVN_WORKER_ID")
     key_id = os.getenv("AGENT_BROKER_KEY_ID")
     target_agent = os.getenv("CVN_TARGET_AGENT")
-    
+
     print(f"CVN_BROKER_ENV     : {broker_env} (Expected: staging)")
     print(f"CVN_WORKER_ID      : {worker_id} (Expected: vps-worker-id-staging)")
     print(f"AGENT_BROKER_KEY_ID: {key_id} (Expected: vps-worker-staging)")
     print(f"CVN_TARGET_AGENT   : {target_agent} (Expected: openclaw)")
-    
+
     errors = 0
     if broker_env != "staging":
         print("[-] ERROR: CVN_BROKER_ENV is not set to 'staging'.")
@@ -54,7 +54,7 @@ def main() -> None:
     if target_agent != "openclaw":
         print("[-] ERROR: CVN_TARGET_AGENT is not 'openclaw'.")
         errors += 1
-        
+
     if errors == 0:
         print("[+] Environment variables are correctly configured.")
     else:
@@ -67,7 +67,7 @@ def main() -> None:
         "AGENT_BROKER_HMAC_SECRET_FILE": os.getenv("AGENT_BROKER_HMAC_SECRET_FILE"),
         "OPENCLAW_GATEWAY_TOKEN_FILE": os.getenv("OPENCLAW_GATEWAY_TOKEN_FILE")
     }
-    
+
     gateway_token_val = None
     cred_errors = 0
     for name, path in creds.items():
@@ -75,13 +75,13 @@ def main() -> None:
             print(f"[-] WARNING: {name} environment variable is not defined.")
             cred_errors += 1
             continue
-            
+
         print(f"Checking {name} -> {path}:")
         if not os.path.exists(path):
             print(f"  [-] ERROR: Credential file does not exist at '{path}'")
             cred_errors += 1
             continue
-            
+
         try:
             with open(path, "r", encoding="utf-8") as f:
                 val = f.read().strip()
@@ -109,7 +109,7 @@ def main() -> None:
     except Exception as e:
         print(f"[-] DNS check failed: {e}")
         errors += 1
-        
+
     status_url = f"https://{project_ref}.supabase.co/functions/v1/cvn-status/CVN-20260712-102230-TEST"
     print("Testing HTTPS connectivity to cvn-status...")
     status_code, body = test_http_get(status_url)
@@ -123,10 +123,10 @@ def main() -> None:
     print_section("4. Local OpenClaw Gateway Connectivity")
     gateway_url = os.getenv("OPENCLAW_GATEWAY_URL", "http://127.0.0.1:18789").strip()
     print(f"OpenClaw Gateway URL: {gateway_url}")
-    
+
     parsed_gateway = urlparse(gateway_url)
     scheme = parsed_gateway.scheme.lower() if parsed_gateway.scheme else ""
-    
+
     is_valid_loopback = False
     if scheme in ("http+unix", "unix"):
         is_valid_loopback = True
@@ -136,7 +136,7 @@ def main() -> None:
         if hostname in ("127.0.0.1", "localhost", "::1"):
             is_valid_loopback = True
             print("[+] Gateway URL points to a local loopback IP/hostname.")
-            
+
     if not is_valid_loopback:
         print(f"[-] ERROR: Gateway URL '{gateway_url}' is not a local loopback endpoint or Unix socket.")
         errors += 1
@@ -158,13 +158,13 @@ def main() -> None:
     models_url = f"{gateway_url}/v1/models"
     print(f"Requesting models list from {models_url}...")
     status_code, body = test_http_get(models_url, headers=gateway_headers)
-    
+
     if status_code == 200:
         try:
             data = json.loads(body)
             models = [m.get("id") for m in data.get("data", [])]
             print(f"[+] Gateway connection successful. Available models: {models}")
-            
+
             expected_model = "openclaw/cvn-broker"
             if expected_model in models:
                 print(f"[+] SUCCESS: Restricted model '{expected_model}' is available.")
@@ -185,7 +185,7 @@ def main() -> None:
     print_section("5. Time Synchronization Check")
     local_utc = datetime.datetime.now(datetime.timezone.utc)
     print(f"Local System UTC Time: {local_utc.isoformat()}")
-    
+
     # Query worldtimeapi or similar to verify system clock is not drifted
     print("Querying public time server to verify clock sync...")
     time_status, time_body = test_http_get("http://worldtimeapi.org/api/timezone/Etc/UTC", timeout=3.0)

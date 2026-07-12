@@ -81,7 +81,7 @@ def test_milestone_2():
     worker_hmac   = WORKER_HMAC
 
     clean_database()
-    
+
     print("\n[*] Scenario 1: Claim when queue is empty")
     now = datetime.datetime.now(datetime.timezone.utc)
     payload = {
@@ -92,7 +92,7 @@ def test_milestone_2():
     }
     body_str = json.dumps(payload, separators=(",", ":"))
     sig = hmac_sha256_hex(body_str, worker_hmac)
-    
+
     res = requests.post(
         f"{BASE_URL}/cvn-claim-task",
         data=body_str,
@@ -125,7 +125,7 @@ def test_milestone_2():
         timeout=60.0
     )
     assert res.status_code == 401
-    
+
     # 2.2. Tampered signature
     res = requests.post(
         f"{BASE_URL}/cvn-claim-task",
@@ -165,10 +165,10 @@ def test_milestone_2():
         "nonce": secrets.token_hex(16),
         "idempotency_key": "key-" + secrets.token_hex(8)
     }
-    
+
     sub_body = json.dumps(submit_payload, separators=(",", ":"))
     sub_sig = hmac_sha256_hex(sub_body, client_hmac)
-    
+
     res = requests.post(
         f"{BASE_URL}/cvn-submit-task",
         data=sub_body,
@@ -191,7 +191,7 @@ def test_milestone_2():
     }
     claim_body = json.dumps(claim_payload, separators=(",", ":"))
     claim_sig = hmac_sha256_hex(claim_body, worker_hmac)
-    
+
     res = requests.post(
         f"{BASE_URL}/cvn-claim-task",
         data=claim_body,
@@ -209,7 +209,7 @@ def test_milestone_2():
     assert claim_data["target_agent"] == "hermes"
     assert claim_data["status"] == "claimed"
     print("[+] Task claimed successfully.")
-    
+
     # Verify db contains queue_msg_id
     db_rows = run_db_query(f"select queue_msg_id, status, claimed_by from public.cvn_tasks where task_id = '{task_id}'")
     row = db_rows["rows"][0]
@@ -260,7 +260,7 @@ def test_milestone_2():
     }
     comp_body = json.dumps(complete_payload, separators=(",", ":"))
     comp_sig = hmac_sha256_hex(comp_body, worker_hmac)
-    
+
     res = requests.post(
         f"{BASE_URL}/cvn-complete-task",
         data=comp_body,
@@ -275,7 +275,7 @@ def test_milestone_2():
     comp_data = res.json()
     assert comp_data["success"] is True
     assert comp_data["message"] == "completed"
-    
+
     # Verify db state
     db_rows = run_db_query(f"select status, queue_msg_id, result_summary from public.cvn_tasks where task_id = '{task_id}'")
     row = db_rows["rows"][0]
@@ -319,7 +319,7 @@ def test_milestone_2():
     submit_payload["task_id"] = task_id2
     submit_payload["idempotency_key"] = "key-" + secrets.token_hex(8)
     submit_payload["nonce"] = secrets.token_hex(16)
-    
+
     sub_body = json.dumps(submit_payload, separators=(",", ":"))
     sub_sig = hmac_sha256_hex(sub_body, client_hmac)
     requests.post(
@@ -332,7 +332,7 @@ def test_milestone_2():
         },
         timeout=60.0
     )
-    
+
     # Claim it
     claim_payload["nonce"] = secrets.token_hex(16)
     claim_body = json.dumps(claim_payload, separators=(",", ":"))
@@ -358,7 +358,7 @@ def test_milestone_2():
     }
     fail_body = json.dumps(fail_payload, separators=(",", ":"))
     fail_sig = hmac_sha256_hex(fail_body, worker_hmac)
-    
+
     res = requests.post(
         f"{BASE_URL}/cvn-fail-task",
         data=fail_body,
@@ -374,7 +374,7 @@ def test_milestone_2():
     assert fail_data["success"] is True
     assert fail_data["status"] == "pending"
     assert fail_data["retry_count"] == 1
-    
+
     # Verify db status is pending (requeued)
     db_rows = run_db_query(f"select status, retry_count from public.cvn_tasks where task_id = '{task_id2}'")
     assert db_rows["rows"][0]["status"] == "pending"
@@ -412,7 +412,7 @@ def test_milestone_2():
             timeout=60.0
         )
         assert res.status_code == 200
-        
+
     # Verify database is now dead_letter
     db_rows = run_db_query(f"select status, retry_count from public.cvn_tasks where task_id = '{task_id2}'")
     assert db_rows["rows"][0]["status"] == "dead_letter"
@@ -428,7 +428,7 @@ def test_milestone_2():
     submit_payload["task_id"] = task_id3
     submit_payload["idempotency_key"] = "key-" + secrets.token_hex(8)
     submit_payload["nonce"] = secrets.token_hex(16)
-    
+
     requests.post(
         f"{BASE_URL}/cvn-submit-task",
         data=json.dumps(submit_payload, separators=(",", ":")),
@@ -439,7 +439,7 @@ def test_milestone_2():
         },
         timeout=60.0
     )
-    
+
     # Claim task
     claim_payload["nonce"] = secrets.token_hex(16)
     requests.post(
@@ -452,11 +452,11 @@ def test_milestone_2():
         },
         timeout=60.0
     )
-    
+
     # Expire expires_at manually in database
     run_db_query(f"update public.cvn_tasks set expires_at = now() - interval '1 second' where task_id = '{task_id3}'")
     print("[+] Expired expires_at in DB.")
-    
+
     # Claim next task (triggers stale claim reaping internally!)
     claim_payload["nonce"] = secrets.token_hex(16)
     res = requests.post(
@@ -471,12 +471,12 @@ def test_milestone_2():
     )
     assert res.status_code == 200, f"Claim failed: {res.text}"
     claim_data = res.json()
-    
+
     # Verify the claim endpoint returned that same task
     assert claim_data["claimed"] is True
     assert claim_data["task_id"] == task_id3
     assert claim_data["status"] == "claimed"
-    
+
     # Verify database state shows status is claimed, retry_count is 1,
     # queue_msg_id (claim token) is valid, and expires_at is renewed (greater than now)
     db_rows = run_db_query(f"select status, retry_count, queue_msg_id, expires_at from public.cvn_tasks where task_id = '{task_id3}'")
@@ -485,13 +485,13 @@ def test_milestone_2():
     assert row["retry_count"] == 1
     assert row["queue_msg_id"] is not None
     assert row["expires_at"] is not None
-    
+
     # Check that visibility deadline (expires_at) has been renewed to the future
     # (Since we expired it to now() - 1s, the new expires_at must be in the future)
     expires_dt = datetime.datetime.fromisoformat(row["expires_at"])
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     assert expires_dt > now_utc, f"expires_at {expires_dt} is not in the future compared to {now_utc}"
-    
+
     print("[+] Stale claim successfully reaped, returned to queue, and immediately reclaimed.")
     print("[+] Scenario 7: Passed")
 
@@ -503,7 +503,7 @@ def test_milestone_2():
     claim_payload["nonce"] = nonce_val
     body_str = json.dumps(claim_payload, separators=(",", ":"))
     sig = hmac_sha256_hex(body_str, worker_hmac)
-    
+
     # First call: OK
     res = requests.post(
         f"{BASE_URL}/cvn-claim-task",
@@ -516,7 +516,7 @@ def test_milestone_2():
         timeout=60.0
     )
     assert res.status_code == 200
-    
+
     # Second call: Duplicate nonce -> 401
     res = requests.post(
         f"{BASE_URL}/cvn-claim-task",
@@ -544,7 +544,7 @@ def test_milestone_2():
     signed_at_str = now_status.isoformat()
     canonical = f"GET\n/functions/v1/cvn-status/{task_id}\ntask_id={task_id}\nsigned_at={signed_at_str}\nnonce={nonce_status}"
     status_sig = hmac_sha256_hex(canonical, client_hmac)
-    
+
     res = requests.get(
         f"{BASE_URL}/cvn-status/{task_id}",
         params={

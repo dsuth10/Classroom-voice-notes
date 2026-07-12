@@ -1,10 +1,10 @@
 # Phase 2C VPS Setup and Live Staging Verification Runbook
 
-**Project:** Classroom Voice Notes (CVN) Broker  
-**Environment:** Supabase staging only  
-**Staging project:** ukqkkgzimhtjhlnmlyao  
-**Execution host:** Existing OpenClaw VPS  
-**Date:** 10 July 2026  
+**Project:** Classroom Voice Notes (CVN) Broker
+**Environment:** Supabase staging only
+**Staging project:** ukqkkgzimhtjhlnmlyao
+**Execution host:** Existing OpenClaw VPS
+**Date:** 10 July 2026
 **Audience:** Implementation agent with administrative access to the VPS
 
 ## 1. Objective
@@ -498,4 +498,3 @@ Stop and report rather than improvising if:
 - [OpenClaw agent tool-policy guidance](https://docs.openclaw.ai/tools/multi-agent-sandbox-tools)
 - [OpenClaw gateway security guidance](https://docs.openclaw.ai/gateway/security)
 - [OpenClaw gateway exposure runbook](https://docs.openclaw.ai/gateway/security/exposure-runbook)
-

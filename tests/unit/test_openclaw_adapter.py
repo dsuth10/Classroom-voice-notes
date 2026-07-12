@@ -31,7 +31,7 @@ class TestOpenClawAdapter(unittest.TestCase):
         }
         self.gateway_token = "test-gateway-token"
         self.adapter = OpenClawAdapter(self.config, self.gateway_token)
-        
+
         self.valid_task = {
             "schema_version": "cvn.agent_task.v1",
             "task_id": "CVN-20260710-120000-ABCD",
@@ -92,11 +92,11 @@ class TestOpenClawAdapter(unittest.TestCase):
         mock_response.status_code = 200
         mock_response.json.return_value = {"output": "CVN adapter connection successful."}
         mock_post.return_value = mock_response
-        
+
         req = self.adapter.convert_task(self.valid_task)
         res = self.adapter.execute(req, 120)
         self.assertEqual(res["output"], "CVN adapter connection successful.")
-        
+
         mock_post.assert_called_once_with(
             "http://127.0.0.1:18789/v1/responses",
             json=req,

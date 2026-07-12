@@ -42,7 +42,7 @@ def resolve_urls() -> Dict[str, str]:
         ref = "slvzyasosjiteimonzen"
     else:
         ref = "ukqkkgzimhtjhlnmlyao"
-        
+
     config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "scratch", "network_config.json")
     if os.path.exists(config_path):
         try:
@@ -120,7 +120,7 @@ def fail_task(task_id: str, error_msg: str, error_code: str, disposition: str) -
 
 def process_task(task_id: str, target_agent: str, payload: Dict[str, Any]) -> bool:
     adapter = DummyAdapter()
-    
+
     # Validate task
     try:
         adapter.validate_task(payload)
@@ -132,7 +132,7 @@ def process_task(task_id: str, target_agent: str, payload: Dict[str, Any]) -> bo
         print(f"[-] Transient validation error: {e}")
         fail_task(task_id, str(e), "VALIDATION_ERROR", "retryable")
         return False
-        
+
     # Convert task
     try:
         request = adapter.convert_task(payload)
@@ -140,7 +140,7 @@ def process_task(task_id: str, target_agent: str, payload: Dict[str, Any]) -> bo
         print(f"[-] Conversion error: {e}")
         fail_task(task_id, f"Conversion error: {str(e)}", "CONVERSION_ERROR", "permanent")
         return False
-        
+
     # Execute task
     try:
         response = adapter.execute(request, 10)
@@ -152,7 +152,7 @@ def process_task(task_id: str, target_agent: str, payload: Dict[str, Any]) -> bo
         print(f"[-] Unexpected execution error: {e}")
         fail_task(task_id, str(e), "EXECUTION_ERROR", "retryable")
         return False
-        
+
     # Validate response
     try:
         result = adapter.validate_response(response)
@@ -164,7 +164,7 @@ def process_task(task_id: str, target_agent: str, payload: Dict[str, Any]) -> bo
         print(f"[-] Unexpected response validation error: {e}")
         fail_task(task_id, str(e), "RESPONSE_VALIDATION_ERROR", "permanent")
         return False
-        
+
     # Complete
     complete_task(task_id, result["result_summary"])
     return True
@@ -173,9 +173,9 @@ def main() -> None:
     print(f"[+] Dummy worker {WORKER_ID} started. Press Ctrl+C to stop.")
     poll_interval = int(os.getenv("DUMMY_POLL_INTERVAL", "5"))
     worker_id = WORKER_ID
-    
+
     backoff_count = 0
-    
+
     while True:
         try:
             now = datetime.datetime.now(datetime.timezone.utc)
@@ -186,15 +186,15 @@ def main() -> None:
                 "signed_at": now.isoformat(),
                 "nonce": secrets.token_hex(16)
             }
-            
+
             urls = resolve_urls()
             print(f"\n[+] Polling {urls['claim']} for tasks...")
             res = make_signed_post(urls["claim"], claim_payload)
-            
+
             if res.status_code in (401, 403):
                 print(f"[-] CRITICAL: HTTP {res.status_code} Unauthorized. Stopping worker.")
                 sys.exit(1)
-                
+
             if res.status_code != 200:
                 print(f"[-] Claim request returned status {res.status_code}")
                 backoff_count += 1
@@ -204,22 +204,22 @@ def main() -> None:
                 print(f"[-] Backing off for {sleep_time:.2f}s...")
                 time.sleep(sleep_time)
                 continue
-                
+
             backoff_count = 0
-            
+
             data = res.json()
             if not data.get("claimed"):
                 print("[-] No pending tasks in queue.")
                 time.sleep(poll_interval)
                 continue
-                
+
             task_id = data["task_id"]
             target_agent = data["target_agent"]
             payload = data["payload"]
-            
+
             print(f"[+] CLAIMED TASK: {task_id} (Target Agent: {target_agent})")
             process_task(task_id, target_agent, payload)
-            
+
         except requests.exceptions.RequestException as e:
             print(f"[-] Network error/timeout: {e}")
             backoff_count += 1
