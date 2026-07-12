@@ -18,7 +18,7 @@ from app.destinations.dummy_adapter import DummyAdapter
 from app.worker.errors import WorkerError
 
 # Environment checks for safety
-CVN_BROKER_ENV = os.getenv("CVN_BROKER_ENV", "staging").strip().lower()
+CVN_BROKER_ENV = os.getenv("CVN_BROKER_ENV", "").strip()
 CVN_ALLOW_PRODUCTION_WORKER = os.getenv("CVN_ALLOW_PRODUCTION_WORKER", "false").strip().lower()
 
 if CVN_BROKER_ENV == "production":
@@ -28,6 +28,9 @@ if CVN_BROKER_ENV == "production":
     else:
         print("[!] WARNING: Running dummy worker against PRODUCTION database!")
         PROJECT_REF = "slvzyasosjiteimonzen"
+elif CVN_BROKER_ENV != "staging":
+    print(f"[-] ERROR: CVN_BROKER_ENV must equal exactly 'staging' or 'production'. Found: '{CVN_BROKER_ENV}'")
+    sys.exit(1)
 else:
     print("[+] Running dummy worker in STAGING mode.")
     PROJECT_REF = "ukqkkgzimhtjhlnmlyao"

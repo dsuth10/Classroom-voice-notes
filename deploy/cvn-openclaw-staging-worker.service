@@ -1,0 +1,47 @@
+[Unit]
+Description=CVN OpenClaw Staging Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cvn-worker
+Group=cvn-worker
+WorkingDirectory=/opt/cvn-worker
+
+Environment=CVN_BROKER_ENV=staging
+Environment=CVN_ENV=staging
+Environment=CVN_ENVIRONMENT=staging
+Environment=CVN_TARGET_AGENT=openclaw
+Environment=AGENT_BROKER_KEY_ID=vps-worker-staging
+Environment=CVN_WORKER_ID=vps-worker-id-staging
+Environment=OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
+Environment=OPENCLAW_RESPONSES_PATH=/v1/responses
+Environment=OPENCLAW_AGENT_ID=cvn-broker
+Environment=AGENT_BROKER_BEARER_TOKEN_FILE=%d/cvn-broker-bearer
+Environment=AGENT_BROKER_HMAC_SECRET_FILE=%d/cvn-broker-hmac
+Environment=OPENCLAW_GATEWAY_TOKEN_FILE=%d/openclaw-gateway-token
+
+LoadCredentialEncrypted=cvn-broker-bearer:/etc/cvn/credentials/broker-bearer
+LoadCredentialEncrypted=cvn-broker-hmac:/etc/cvn/credentials/broker-hmac
+LoadCredentialEncrypted=openclaw-gateway-token:/etc/cvn/credentials/openclaw-gateway-token
+
+ExecStartPre=/opt/cvn-worker/.venv/bin/python deploy/wait_for_gateway.py
+ExecStart=/opt/cvn-worker/.venv/bin/python scripts/watch_inbox_worker.py
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

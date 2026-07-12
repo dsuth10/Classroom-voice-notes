@@ -1,6 +1,5 @@
 # app/worker/broker_worker.py
 import os
-import sys
 import time
 import secrets
 import datetime
@@ -26,7 +25,7 @@ from app.worker.errors import (
 )
 
 # Environment variables to determine mode
-CVN_BROKER_ENV = os.getenv("CVN_BROKER_ENV", "staging").strip().lower()
+CVN_BROKER_ENV = os.getenv("CVN_BROKER_ENV", "").strip()
 CVN_ALLOW_PRODUCTION_WORKER = os.getenv("CVN_ALLOW_PRODUCTION_WORKER", "false").strip().lower()
 
 class BrokerWorker:
@@ -34,7 +33,66 @@ class BrokerWorker:
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
-        self.worker_id = f"openclaw-worker-{secrets.token_hex(4)}"
+        
+        self.key_id = os.getenv("AGENT_BROKER_KEY_ID")
+        self.worker_id = os.getenv("CVN_WORKER_ID")
+        self.target_agent = os.getenv("CVN_TARGET_AGENT")
+        
+        # Determine if we are running as the VPS worker (where key_id is vps-worker-staging)
+        is_vps_worker = (self.key_id == "vps-worker-staging")
+        
+        if self.target_agent == "openclaw" or is_vps_worker:
+            broker_env = os.getenv("CVN_BROKER_ENV", "").strip()
+            if broker_env != "staging":
+                raise RuntimeError("CVN_BROKER_ENV must equal exactly 'staging'")
+
+        if is_vps_worker:
+            if not self.worker_id:
+                raise RuntimeError("Missing required configuration: CVN_WORKER_ID environment variable is absent.")
+            if not self.target_agent:
+                raise RuntimeError("Missing required configuration: CVN_TARGET_AGENT environment variable is absent.")
+            if self.target_agent != "openclaw":
+                raise RuntimeError(f"Target agent '{self.target_agent}' is not authorized for VPS worker. Must be 'openclaw'.")
+        else:
+            # Fallbacks for Windows/Hermes/local testing compatibility
+            if not self.target_agent:
+                self.target_agent = "openclaw"
+            if not self.worker_id:
+                # Default to randomized worker ID if not set for backward compatibility
+                self.worker_id = f"openclaw-worker-{secrets.token_hex(4)}"
+                
+        if self.target_agent not in ("openclaw", "hermes"):
+            raise RuntimeError(f"Target agent '{self.target_agent}' is not supported. Must be 'openclaw' or 'hermes'.")
+            
+        # Validate gateway URL - accept only loopback or Unix sockets
+        if self.target_agent == "openclaw":
+            from urllib.parse import urlparse
+            gateway_url = self.config.get("openclaw", {}).get("gateway_url")
+            if not gateway_url:
+                raise RuntimeError("Missing gateway URL in configuration")
+            
+            parsed = urlparse(gateway_url)
+            scheme = parsed.scheme.lower() if parsed.scheme else ""
+            
+            if scheme in ("http+unix", "unix"):
+                # Unix sockets are explicitly supported loopbacks
+                pass
+            elif scheme in ("http", "https"):
+                hostname = parsed.hostname.lower() if parsed.hostname else ""
+                if hostname not in ("127.0.0.1", "localhost", "::1"):
+                    raise RuntimeError(
+                        f"Gateway URL '{gateway_url}' is not a local loopback endpoint. "
+                        "Only loopbacks (127.0.0.1, localhost, [::1]) or Unix sockets (http+unix://) are permitted."
+                    )
+            else:
+                raise RuntimeError(f"Gateway URL '{gateway_url}' has an unsupported scheme or is malformed.")
+            
+        # Verify broker URLs do not target production
+        urls = self.resolve_urls()
+        for name, url in urls.items():
+            if "ukqkkgzimhtjhlnmlyao" not in url:
+                raise RuntimeError(f"Broker URL for {name} does not target staging: {url}")
+                
         self.running = False
         
         # Resolve secrets
@@ -48,17 +106,15 @@ class BrokerWorker:
             "AGENT_BROKER_HMAC_SECRET_FILE",
             "agent_broker_hmac_secret"
         )
-        self.gateway_token = self._resolve_secret(
-            "OPENCLAW_GATEWAY_TOKEN",
-            "OPENCLAW_GATEWAY_TOKEN_FILE",
-            "openclaw_gateway_token"
-        )
-        self.key_id = os.getenv("AGENT_BROKER_KEY_ID")
         
-        # Verify safety guards
-        if CVN_BROKER_ENV == "production" and CVN_ALLOW_PRODUCTION_WORKER != "true":
-            print("[-] CRITICAL SAFETY GUARD: Refusing to run worker against PRODUCTION.")
-            sys.exit(1)
+        if self.target_agent == "openclaw":
+            self.gateway_token = self._resolve_secret(
+                "OPENCLAW_GATEWAY_TOKEN",
+                "OPENCLAW_GATEWAY_TOKEN_FILE",
+                "openclaw_gateway_token"
+            )
+        else:
+            self.gateway_token = ""
             
     def _resolve_secret(self, direct_var: str, file_var: str, keyring_ref: str) -> str:
         """Resolves secrets using systemd credential files, env variables, or keyring fallback."""
@@ -245,7 +301,7 @@ class BrokerWorker:
         claim_payload = {
             "worker_id": self.worker_id,
             "vt_seconds": 1800,
-            "target_agent": "openclaw",
+            "target_agent": self.target_agent,
             "signed_at": now.isoformat(),
             "nonce": secrets.token_hex(16)
         }

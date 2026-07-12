@@ -7,20 +7,22 @@ import requests
 import json
 import hashlib
 import hmac
+import pytest
 
 # For local testing, use the local Supabase URL
 LOCAL_URL = "http://127.0.0.1:54321/functions/v1"
 BASE_URL = os.environ.get("CVN_TEST_BASE_URL", LOCAL_URL)
 
-def _require_env(name: str) -> str:
+MISSING_ENV = False
+def _get_env(name: str) -> str:
+    global MISSING_ENV
     val = os.environ.get(name, "").strip()
     if not val:
-        print(f"[-] Missing required environment variable: {name}")
-        sys.exit(1)
+        MISSING_ENV = True
     return val
 
-CLIENT_BEARER = _require_env("CVN_BEARER_TOKEN")
-CLIENT_HMAC   = _require_env("CVN_HMAC_SECRET")
+CLIENT_BEARER = _get_env("CVN_BEARER_TOKEN")
+CLIENT_HMAC   = _get_env("CVN_HMAC_SECRET")
 
 def hmac_sha256_hex(body: str, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -99,6 +101,7 @@ def make_signed_worker_status_get(task_id: str, key_id: str, bearer: str, hmac_s
         timeout=30.0
     )
 
+@pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for staging tests")
 def test_worker_identities():
     print("\n[*] Starting Phase 2C.1 Worker Identity Authentication Tests...")
     
@@ -298,6 +301,7 @@ def submit_test_task_for_worker(suffix: str, target_agent: str) -> str:
     assert res.status_code == 200, f"Task submit failed: {res.text}"
     return task_id
 
+@pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for staging tests")
 def test_credential_disable_rotation():
     print("\n[*] Starting Phase 2C.1 Credential Disable & Rotation Tests...")
     

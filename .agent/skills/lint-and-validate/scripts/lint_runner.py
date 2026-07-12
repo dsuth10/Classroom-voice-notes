@@ -76,15 +76,35 @@ def run_linter(linter: dict, cwd: Path) -> dict:
         "error": ""
     }
     
+    import os
+    import shutil
+    env = os.environ.copy()
+    venv_dir = cwd / ".venv"
+    cmd = linter["cmd"].copy()
+    if venv_dir.exists():
+        bin_dir = venv_dir / ("Scripts" if os.name == "nt" else "bin")
+        if bin_dir.exists():
+            path_key = "PATH"
+            for k in env.keys():
+                if k.upper() == "PATH":
+                    path_key = k
+                    break
+            env[path_key] = str(bin_dir) + os.pathsep + env.get(path_key, "")
+            
+            resolved_exe = shutil.which(cmd[0], path=str(bin_dir))
+            if resolved_exe:
+                cmd[0] = resolved_exe
+            
     try:
         proc = subprocess.run(
-            linter["cmd"],
+            cmd,
             cwd=str(cwd),
             capture_output=True,
             text=True,
             encoding='utf-8',
             errors='replace',
-            timeout=120
+            timeout=120,
+            env=env
         )
         
         result["output"] = proc.stdout[:2000] if proc.stdout else ""

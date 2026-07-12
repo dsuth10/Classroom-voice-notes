@@ -15,23 +15,25 @@ import hashlib
 import hmac
 import requests
 import json
+import pytest
 
 # Target staging project ref only — never production
 PROJECT_REF = "ukqkkgzimhtjhlnmlyao"
 BASE_URL = f"https://{PROJECT_REF}.supabase.co/functions/v1"
 
-def _require_env(name: str) -> str:
+MISSING_ENV = False
+def _get_env(name: str) -> str:
+    global MISSING_ENV
     val = os.environ.get(name, "").strip()
     if not val:
-        print(f"[-] Missing required environment variable: {name}")
-        sys.exit(1)
+        MISSING_ENV = True
     return val
 
 # Fail fast if secrets are missing
-CLIENT_BEARER = _require_env("CVN_BEARER_TOKEN")
-CLIENT_HMAC   = _require_env("CVN_HMAC_SECRET")
-WORKER_BEARER = _require_env("AGENT_BROKER_BEARER_TOKEN")
-WORKER_HMAC   = _require_env("AGENT_BROKER_HMAC_SECRET")
+CLIENT_BEARER = _get_env("CVN_BEARER_TOKEN")
+CLIENT_HMAC   = _get_env("CVN_HMAC_SECRET")
+WORKER_BEARER = _get_env("AGENT_BROKER_BEARER_TOKEN")
+WORKER_HMAC   = _get_env("AGENT_BROKER_HMAC_SECRET")
 
 
 def run_db_query(sql: str) -> dict:
@@ -71,6 +73,7 @@ def clean_database():
     run_db_query("select pgmq.purge_queue('cvn_tasks_queue_hermes')")
     print("[+] Database clean.")
 
+@pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for staging tests")
 def test_milestone_2():
     client_bearer = CLIENT_BEARER
     client_hmac   = CLIENT_HMAC

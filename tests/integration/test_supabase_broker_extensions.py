@@ -7,21 +7,23 @@ import requests
 import json
 import hashlib
 import hmac
+import pytest
 
 PROJECT_REF = "ukqkkgzimhtjhlnmlyao"
 BASE_URL = f"https://{PROJECT_REF}.supabase.co/functions/v1"
 
-def _require_env(name: str) -> str:
+MISSING_ENV = False
+def _get_env(name: str) -> str:
+    global MISSING_ENV
     val = os.environ.get(name, "").strip()
     if not val:
-        print(f"[-] Missing required environment variable: {name}")
-        sys.exit(1)
+        MISSING_ENV = True
     return val
 
-CLIENT_BEARER = _require_env("CVN_BEARER_TOKEN")
-CLIENT_HMAC   = _require_env("CVN_HMAC_SECRET")
-WORKER_BEARER = _require_env("AGENT_BROKER_BEARER_TOKEN")
-WORKER_HMAC   = _require_env("AGENT_BROKER_HMAC_SECRET")
+CLIENT_BEARER = _get_env("CVN_BEARER_TOKEN")
+CLIENT_HMAC   = _get_env("CVN_HMAC_SECRET")
+WORKER_BEARER = _get_env("AGENT_BROKER_BEARER_TOKEN")
+WORKER_HMAC   = _get_env("AGENT_BROKER_HMAC_SECRET")
 
 def hmac_sha256_hex(body: str, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), body.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -82,6 +84,7 @@ def get_task_status(task_id: str) -> dict:
         return res.json()
     raise RuntimeError(f"Failed to query status: {res.status_code} {res.text}")
 
+@pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for staging tests")
 def test_broker_extensions():
     print("\n[*] Starting Phase 2C.0 Broker Extensions Staging Tests...")
     
