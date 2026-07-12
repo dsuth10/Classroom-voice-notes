@@ -67,6 +67,8 @@ def clean_database():
     run_db_query("delete from public.cvn_tasks")
     run_db_query("delete from public.cvn_processed_nonces")
     run_db_query("select pgmq.purge_queue('cvn_tasks_queue')")
+    run_db_query("select pgmq.purge_queue('cvn_tasks_queue_openclaw')")
+    run_db_query("select pgmq.purge_queue('cvn_tasks_queue_hermes')")
     print("[+] Database clean.")
 
 def test_milestone_2():

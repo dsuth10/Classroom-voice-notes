@@ -134,6 +134,12 @@ serve(async (req: Request) => {
   }
 
   if (!task) {
+    if (!isClient) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 403,
+        headers: { ...corsHeaders, "content-type": "application/json" }
+      });
+    }
     return new Response(JSON.stringify({ error: "task_not_found" }), {
       status: 404,
       headers: { ...corsHeaders, "content-type": "application/json" }
@@ -143,7 +149,7 @@ serve(async (req: Request) => {
   // 7. Authorize worker
   if (!isClient && principal) {
     if (!principal.allowed_targets.includes(task.target_agent)) {
-      return new Response(JSON.stringify({ error: "unauthorized_target" }), {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
         status: 403,
         headers: { ...corsHeaders, "content-type": "application/json" }
       });

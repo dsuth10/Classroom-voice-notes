@@ -15,7 +15,7 @@ All requests made by workers (Claim, Complete, Fail) must include the following 
 - `x-cvn-signature`: HMAC SHA-256 signature over the request body (or canonical URL string for GET requests).
 - `x-cvn-key-id`: The unique worker key identifier issued during credential provisioning.
 
-If `x-cvn-key-id` is omitted, the broker falls back to legacy shared-credential authentication (deprecated).
+If `x-cvn-key-id` is omitted, the broker falls back to legacy shared-credential authentication (deprecated; scheduled for complete removal in Milestone 3.0).
 
 ### 1.2. CVN Task Submission (Client Envelope)
 * **Endpoint:** `POST /functions/v1/cvn-submit-task`

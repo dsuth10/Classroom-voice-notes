@@ -107,8 +107,8 @@ serve(async (req: Request) => {
   }
 
   // Authorize worker ID constraint if not legacy
-  if (!principal.legacy && principal.allowed_worker_ids.length > 0) {
-    if (!principal.allowed_worker_ids.includes(workerId)) {
+  if (!principal.legacy) {
+    if (!principal.allowed_worker_ids || !principal.allowed_worker_ids.includes(workerId)) {
       return new Response(JSON.stringify({ error: "unauthorized_worker_id" }), {
         status: 403,
         headers: { ...corsHeaders, "content-type": "application/json" }
@@ -171,14 +171,19 @@ serve(async (req: Request) => {
   const result = Array.isArray(data) ? data[0] : data;
   if (!result || !result.success) {
     const errCode = result?.message ?? "unknown_error";
-    let status = 400;
     if (errCode === "task_claimed_by_another_worker") {
-      status = 409;
-    } else if (!result.status) {
-      status = 403; // Unauthorized target or task not found (we rely on the RPC returning FALSE for unauthorized)
+      return new Response(JSON.stringify({ error: errCode }), {
+        status: 409,
+        headers: { ...corsHeaders, "content-type": "application/json" }
+      });
+    } else if (errCode === "unauthorized_target" || !result.status) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 403,
+        headers: { ...corsHeaders, "content-type": "application/json" }
+      });
     }
     return new Response(JSON.stringify({ error: errCode }), {
-      status: status,
+      status: 400,
       headers: { ...corsHeaders, "content-type": "application/json" }
     });
   }

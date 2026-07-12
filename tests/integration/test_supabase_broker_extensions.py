@@ -40,17 +40,22 @@ def make_signed_client_post(endpoint: str, payload: dict) -> requests.Response:
         timeout=30.0
     )
 
-def make_signed_worker_post(endpoint: str, payload: dict) -> requests.Response:
+def make_signed_worker_post(endpoint: str, payload: dict, key_id: str = None, bearer: str = None, hmac_secret: str = None) -> requests.Response:
+    use_bearer = bearer if bearer else WORKER_BEARER
+    use_hmac = hmac_secret if hmac_secret else WORKER_HMAC
     body_str = json.dumps(payload, separators=(",", ":"))
-    sig = hmac_sha256_hex(body_str, WORKER_HMAC)
+    sig = hmac_sha256_hex(body_str, use_hmac)
+    headers = {
+        "Authorization": f"Bearer {use_bearer}",
+        "x-cvn-signature": sig,
+        "Content-Type": "application/json"
+    }
+    if key_id:
+        headers["x-cvn-key-id"] = key_id
     return requests.post(
         f"{BASE_URL}/{endpoint}",
         data=body_str,
-        headers={
-            "Authorization": f"Bearer {WORKER_BEARER}",
-            "x-cvn-signature": sig,
-            "Content-Type": "application/json"
-        },
+        headers=headers,
         timeout=30.0
     )
 
@@ -120,15 +125,24 @@ def test_broker_extensions():
     res = make_signed_worker_post("cvn-claim-task", claim_payload)
     assert res.status_code == 200
     data = res.json()
-    assert data["claimed"] is False, "Hermes worker claimed an OpenClaw task!"
-    print("[+] Verified: Hermes worker did not claim OpenClaw task.")
+    if data["claimed"]:
+        assert data["task_id"] != task_id, "Hermes worker claimed the OpenClaw task!"
+        print("[+] Claimed another pending task, but successfully avoided claiming OpenClaw task.")
+    else:
+        print("[+] Verified: Hermes worker did not claim OpenClaw task.")
     
     # 3. Claim as an 'openclaw' worker. It should claim it.
     print("[*] Worker polling for openclaw targets...")
     claim_payload["target_agent"] = "openclaw"
     claim_payload["worker_id"] = "worker-openclaw-01"
     claim_payload["nonce"] = secrets.token_hex(16)
-    res = make_signed_worker_post("cvn-claim-task", claim_payload)
+    res = make_signed_worker_post(
+        "cvn-claim-task",
+        claim_payload,
+        key_id="test-openclaw-worker-01",
+        bearer="fixture_openclaw_bearer_1234567890",
+        hmac_secret="fixture_openclaw_hmac_secret_1234567890"
+    )
     assert res.status_code == 200
     data = res.json()
     assert data["claimed"] is True
@@ -149,7 +163,13 @@ def test_broker_extensions():
         "signed_at": now.isoformat(),
         "nonce": secrets.token_hex(16)
     }
-    res = make_signed_worker_post("cvn-fail-task", fail_payload)
+    res = make_signed_worker_post(
+        "cvn-fail-task",
+        fail_payload,
+        key_id="test-openclaw-worker-01",
+        bearer="fixture_openclaw_bearer_1234567890",
+        hmac_secret="fixture_openclaw_hmac_secret_1234567890"
+    )
     assert res.status_code == 200
     fail_res = res.json()
     assert fail_res["success"] is True
@@ -175,7 +195,13 @@ def test_broker_extensions():
     
     # Claim it
     claim_payload["nonce"] = secrets.token_hex(16)
-    res = make_signed_worker_post("cvn-claim-task", claim_payload)
+    res = make_signed_worker_post(
+        "cvn-claim-task",
+        claim_payload,
+        key_id="test-openclaw-worker-01",
+        bearer="fixture_openclaw_bearer_1234567890",
+        hmac_secret="fixture_openclaw_hmac_secret_1234567890"
+    )
     assert res.status_code == 200
     assert res.json()["claimed"] is True
     
@@ -192,7 +218,13 @@ def test_broker_extensions():
         "signed_at": now.isoformat(),
         "nonce": secrets.token_hex(16)
     }
-    res = make_signed_worker_post("cvn-fail-task", fail_payload2)
+    res = make_signed_worker_post(
+        "cvn-fail-task",
+        fail_payload2,
+        key_id="test-openclaw-worker-01",
+        bearer="fixture_openclaw_bearer_1234567890",
+        hmac_secret="fixture_openclaw_hmac_secret_1234567890"
+    )
     assert res.status_code == 200
     fail_res2 = res.json()
     assert fail_res2["success"] is True

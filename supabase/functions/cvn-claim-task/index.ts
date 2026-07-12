@@ -84,8 +84,8 @@ serve(async (req: Request) => {
     });
   }
 
-  if (!principal.legacy && principal.allowed_worker_ids.length > 0) {
-    if (!principal.allowed_worker_ids.includes(payload.worker_id)) {
+  if (!principal.legacy) {
+    if (!principal.allowed_worker_ids || !principal.allowed_worker_ids.includes(payload.worker_id)) {
       return new Response(JSON.stringify({ error: "unauthorized_worker_id" }), {
         status: 403,
         headers: { ...corsHeaders, "content-type": "application/json" }

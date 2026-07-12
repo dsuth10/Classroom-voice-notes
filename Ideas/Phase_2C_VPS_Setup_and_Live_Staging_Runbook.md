@@ -309,6 +309,7 @@ ExecStart=/opt/classroom-voice-notes/.venv/bin/python scripts/watch_inbox_worker
 
 Environment=CVN_ENV=staging
 Environment=CVN_TARGET_AGENT=openclaw
+Environment=AGENT_BROKER_KEY_ID=vps-worker-staging
 Environment=OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 Environment=OPENCLAW_RESPONSES_PATH=/v1/responses
 Environment=OPENCLAW_AGENT_ID=cvn-broker
@@ -316,9 +317,9 @@ Environment=AGENT_BROKER_BEARER_TOKEN_FILE=%d/cvn-broker-bearer
 Environment=AGENT_BROKER_HMAC_SECRET_FILE=%d/cvn-broker-hmac
 Environment=OPENCLAW_GATEWAY_TOKEN_FILE=%d/openclaw-gateway-token
 
-LoadCredential=cvn-broker-bearer:/etc/cvn/credentials/broker-bearer
-LoadCredential=cvn-broker-hmac:/etc/cvn/credentials/broker-hmac
-LoadCredential=openclaw-gateway-token:/etc/cvn/credentials/openclaw-gateway-token
+LoadCredentialEncrypted=cvn-broker-bearer:/etc/cvn/credentials/broker-bearer
+LoadCredentialEncrypted=cvn-broker-hmac:/etc/cvn/credentials/broker-hmac
+LoadCredentialEncrypted=openclaw-gateway-token:/etc/cvn/credentials/openclaw-gateway-token
 
 Restart=on-failure
 RestartSec=10
