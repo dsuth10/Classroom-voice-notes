@@ -157,7 +157,27 @@ class OpenClawAdapter:
         # 1. Extract response output text
         output_text = None
         if "output" in response:
-            output_text = response["output"]
+            raw_output = response["output"]
+            if isinstance(raw_output, str):
+                output_text = raw_output
+            elif isinstance(raw_output, list):
+                texts = []
+                for item in raw_output:
+                    if isinstance(item, dict):
+                        if item.get("type") == "message" and "content" in item:
+                            content_blocks = item["content"]
+                            if isinstance(content_blocks, list):
+                                for block in content_blocks:
+                                    if isinstance(block, dict) and block.get("type") == "output_text":
+                                        texts.append(block.get("text", ""))
+                            elif isinstance(content_blocks, str):
+                                texts.append(content_blocks)
+                        elif "text" in item:
+                            texts.append(item["text"])
+                    elif isinstance(item, str):
+                        texts.append(item)
+                if texts:
+                    output_text = "\n".join(texts)
         elif "choices" in response and len(response["choices"]) > 0:
             choice = response["choices"][0]
             if "message" in choice:

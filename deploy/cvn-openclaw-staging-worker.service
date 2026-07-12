@@ -22,12 +22,12 @@ Environment=AGENT_BROKER_BEARER_TOKEN_FILE=%d/cvn-broker-bearer
 Environment=AGENT_BROKER_HMAC_SECRET_FILE=%d/cvn-broker-hmac
 Environment=OPENCLAW_GATEWAY_TOKEN_FILE=%d/openclaw-gateway-token
 
-LoadCredentialEncrypted=cvn-broker-bearer:/etc/cvn/credentials/broker-bearer
-LoadCredentialEncrypted=cvn-broker-hmac:/etc/cvn/credentials/broker-hmac
+LoadCredentialEncrypted=cvn-broker-bearer:/etc/cvn/credentials/cvn-broker-bearer
+LoadCredentialEncrypted=cvn-broker-hmac:/etc/cvn/credentials/cvn-broker-hmac
 LoadCredentialEncrypted=openclaw-gateway-token:/etc/cvn/credentials/openclaw-gateway-token
 
 ExecStartPre=/opt/cvn-worker/.venv/bin/python deploy/wait_for_gateway.py
-ExecStart=/opt/cvn-worker/.venv/bin/python scripts/watch_inbox_worker.py
+ExecStart=/opt/cvn-worker/.venv/bin/python -u scripts/watch_inbox_worker.py
 Restart=on-failure
 RestartSec=10s
 TimeoutStopSec=30s

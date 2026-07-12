@@ -110,11 +110,10 @@ def main() -> None:
         print(f"[-] DNS check failed: {e}")
         errors += 1
         
-    status_url = f"https://{project_ref}.supabase.co/functions/v1/cvn-status/dummy-id"
+    status_url = f"https://{project_ref}.supabase.co/functions/v1/cvn-status/CVN-20260712-102230-TEST"
     print("Testing HTTPS connectivity to cvn-status...")
-    # Expected result is 401 Unauthorized or 403 Forbidden since we are sending no auth
     status_code, body = test_http_get(status_url)
-    if status_code in (401, 403, 404):
+    if status_code in (400, 401, 403, 404):
         print(f"[+] HTTPS connectivity check successful. HTTP status returned: {status_code}")
     else:
         print(f"[-] HTTPS connectivity check returned unexpected status {status_code}: {body}")

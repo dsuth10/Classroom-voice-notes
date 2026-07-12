@@ -344,8 +344,28 @@ def test_credential_disable_rotation():
         }
     }
 
+    # Dynamic retrieval of staging VPS credentials to preserve them in base_registry
+    vps_bearer = None
+    vps_hmac = None
+    try:
+        import subprocess
+        vps_bearer = subprocess.run(['ssh', 'contabo-vault', 'sudo systemd-creds decrypt /etc/cvn/credentials/cvn-broker-bearer'], capture_output=True, text=True).stdout.strip()
+        vps_hmac = subprocess.run(['ssh', 'contabo-vault', 'sudo systemd-creds decrypt /etc/cvn/credentials/cvn-broker-hmac'], capture_output=True, text=True).stdout.strip()
+        if vps_bearer and vps_hmac and not vps_bearer.startswith("ssh") and not vps_hmac.startswith("ssh"):
+            base_registry["keys"]["vps-worker-staging"] = {
+                "enabled": True,
+                "bearer_token": vps_bearer,
+                "hmac_secret": vps_hmac,
+                "allowed_targets": ["openclaw"],
+                "allowed_worker_ids": ["vps-worker-id-staging"]
+            }
+            print("[+] Successfully retrieved and merged vps-worker-staging credentials into base_registry")
+        else:
+            print("[-] Decrypted credentials from VPS were empty or invalid.")
+    except Exception as e:
+        print(f"[-] Warning: Failed to retrieve vps-worker-staging credentials from VPS: {e}")
+
     import copy
-    import subprocess
     import time
 
     def push_registry(registry_dict: dict):
@@ -497,6 +517,27 @@ def test_credential_disable_rotation():
     )
     assert res.status_code == 401, f"Expected 401 for rotated credential after cleanup, got {res.status_code} {res.text}"
     print("[+] Verified rotated credential returns 401 after cleanup")
+
+    # 9. Post-restoration verification that permanent VPS staging worker credential succeeds
+    if vps_bearer and vps_hmac:
+        print("[*] Test 8: Verifying permanent VPS staging credential after cleanup...")
+        task_id_vps = submit_test_task_for_worker("vps-test", "openclaw")
+        claim_payload_vps = {
+            "worker_id": "vps-worker-id-staging",
+            "target_agent": "openclaw",
+            "vt_seconds": 60,
+            "signed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "nonce": secrets.token_hex(16)
+        }
+        res = make_signed_worker_post(
+            "cvn-claim-task",
+            claim_payload_vps,
+            key_id="vps-worker-staging",
+            bearer=vps_bearer,
+            hmac_secret=vps_hmac
+        )
+        assert res.status_code == 200, f"Expected 200 for restored VPS credential, got {res.status_code} {res.text}"
+        print("[+] Verified restored permanent VPS staging credential completes a successful authenticated request (200)")
 
     print("[*] All Disable and Rotation Tests Passed!")
 
