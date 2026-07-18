@@ -27,6 +27,10 @@ bin/whisper/ggml-*.bin
 Obsidian/Joshua Note Exchange/Classroom Voice Notes/
 **/.obsidian/workspace.json
 **/workspace.json.bak
+# Scratch / one-off test scripts (may contain secrets — NEVER commit)
+scratch/
 
+# Supabase CLI ephemeral state
+supabase/.temp/
 
 
