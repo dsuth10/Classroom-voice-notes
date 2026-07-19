@@ -25,7 +25,7 @@ from app.worker.errors import (
 )
 
 # Environment variables to determine mode
-CVN_BROKER_ENV = os.getenv("CVN_BROKER_ENV", "").strip()
+from app.config.environment import get_broker_env, get_env_credential_ref
 CVN_ALLOW_PRODUCTION_WORKER = os.getenv("CVN_ALLOW_PRODUCTION_WORKER", "false").strip().lower()
 
 class BrokerWorker:
@@ -41,10 +41,26 @@ class BrokerWorker:
         # Determine if we are running as the VPS worker (where key_id is vps-worker-staging)
         is_vps_worker = (self.key_id == "vps-worker-staging")
 
-        if self.target_agent == "openclaw" or is_vps_worker:
-            broker_env = os.getenv("CVN_BROKER_ENV", "").strip()
-            if broker_env != "staging":
+        # Determine resolved target agent for env check before fallbacks are applied
+        target_agent_resolved = self.target_agent or ("openclaw" if not is_vps_worker else None)
+
+        # Safe environment validation
+        if target_agent_resolved == "openclaw" or is_vps_worker:
+            try:
+                self.broker_env = get_broker_env()
+                if self.broker_env != "staging":
+                    raise RuntimeError("CVN_BROKER_ENV must equal exactly 'staging'")
+            except Exception:
                 raise RuntimeError("CVN_BROKER_ENV must equal exactly 'staging'")
+        else:
+            self.broker_env = get_broker_env()
+
+        if not self.key_id:
+            try:
+                from app.config.keyring_store import get_secret
+                self.key_id = get_secret(get_env_credential_ref("key_id"))
+            except Exception:
+                pass
 
         if is_vps_worker:
             if not self.worker_id:
@@ -87,11 +103,15 @@ class BrokerWorker:
             else:
                 raise RuntimeError(f"Gateway URL '{gateway_url}' has an unsupported scheme or is malformed.")
 
-        # Verify broker URLs do not target production
+        # Verify broker URLs match the environment
         urls = self.resolve_urls()
         for name, url in urls.items():
-            if "ukqkkgzimhtjhlnmlyao" not in url:
-                raise RuntimeError(f"Broker URL for {name} does not target staging: {url}")
+            if self.broker_env == "staging":
+                if "ukqkkgzimhtjhlnmlyao" not in url:
+                    raise RuntimeError(f"Broker URL for {name} does not target staging: {url}")
+            elif self.broker_env == "production":
+                if "slvzyasosjiteimonzen" not in url:
+                    raise RuntimeError(f"Broker URL for {name} does not target production: {url}")
 
         self.running = False
 
@@ -99,12 +119,12 @@ class BrokerWorker:
         self.bearer_token = self._resolve_secret(
             "AGENT_BROKER_BEARER_TOKEN",
             "AGENT_BROKER_BEARER_TOKEN_FILE",
-            "agent_broker_bearer_token"
+            get_env_credential_ref("bearer_token")
         )
         self.hmac_secret = self._resolve_secret(
             "AGENT_BROKER_HMAC_SECRET",
             "AGENT_BROKER_HMAC_SECRET_FILE",
-            "agent_broker_hmac_secret"
+            get_env_credential_ref("hmac_secret")
         )
 
         if self.target_agent == "openclaw":
@@ -144,7 +164,7 @@ class BrokerWorker:
         raise RuntimeError(f"Missing required secret configuration: {direct_var} or {file_var}")
 
     def resolve_urls(self) -> Dict[str, str]:
-        if CVN_BROKER_ENV == "production":
+        if self.broker_env == "production":
             ref = "slvzyasosjiteimonzen"
         else:
             ref = "ukqkkgzimhtjhlnmlyao"
@@ -349,7 +369,7 @@ class BrokerWorker:
         time.sleep(total)
 
     def run(self) -> None:
-        print(f"[+] Worker {self.worker_id} initialised (env: {CVN_BROKER_ENV}).")
+        print(f"[+] Worker {self.worker_id} initialised (env: {self.broker_env}).")
         self.running = True
         self.backoff_count = 0
         poll_interval = int(self.config.get("poll_interval_seconds", 5))

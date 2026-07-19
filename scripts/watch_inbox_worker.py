@@ -9,7 +9,15 @@ sys.path.insert(0, project_root)
 from app.worker.broker_worker import BrokerWorker
 
 def main() -> None:
-    print("=== Classroom Voice Notes: Production Broker Worker ===")
+    try:
+        from app.config.environment import get_broker_env
+        env = get_broker_env()
+    except Exception as e:
+        print(f"[-] CRITICAL CONFIGURATION ERROR: {e}")
+        sys.exit(1)
+
+    banner_env = "Staging" if env == "staging" else "Production"
+    print(f"=== Classroom Voice Notes: {banner_env} Broker Worker ===")
 
     config = {
         "poll_interval_seconds": int(os.getenv("CVN_POLL_INTERVAL_SECONDS", "5")),

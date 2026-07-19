@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
 )
+from PySide6.QtCore import QTimer
 from app.config.settings import SettingsManager
 
 class MainWindow(QMainWindow):
@@ -330,19 +331,36 @@ class MainWindow(QMainWindow):
         except Exception:
             stats = {"pending": 0, "sent": 0, "dead_letter": 0}
             
+        pending = stats.get("pending", 0) + stats.get("sending", 0)
+        sent = stats.get("sent", 0) + stats.get("completed", 0) + stats.get("processing", 0)
+        stuck = stats.get("dead_letter", 0)
+
         self.outbox_status_label = QLabel(
-            f"Local Outbox: {stats['pending']} pending, {stats['sent']} sent, {stats['dead_letter']} stuck"
+            f"Local Outbox: {pending} pending, {sent} sent, {stuck} stuck"
         )
         self.outbox_status_label.setStyleSheet("color: #555; font-size: 11px;")
         
-        # Retrying outbox button
+        # Retrying/Viewing outbox layout
         retry_layout = QHBoxLayout()
         retry_layout.addWidget(self.outbox_status_label)
         
         self.retry_outbox_btn = QPushButton("Retry Outbox Now")
         self.retry_outbox_btn.clicked.connect(self.retry_outbox_now)
         retry_layout.addWidget(self.retry_outbox_btn)
+
+        self.view_outbox_btn = QPushButton("View Outbox")
+        self.view_outbox_btn.clicked.connect(self.view_outbox)
+        retry_layout.addWidget(self.view_outbox_btn)
+
         broker_layout.addLayout(retry_layout)
+
+        if self.controller:
+            self.controller.outbox_processed.connect(self.refresh_outbox_label)
+            
+        # Timer to refresh outbox status label automatically
+        self.outbox_refresh_timer = QTimer(self)
+        self.outbox_refresh_timer.timeout.connect(self.refresh_outbox_label)
+        self.outbox_refresh_timer.start(10000) # every 10 seconds
         
         main_layout.addWidget(broker_group)
 
@@ -479,18 +497,33 @@ class MainWindow(QMainWindow):
     def retry_outbox_now(self) -> None:
         """Trigger outbox transmission retry manually from settings."""
         if self.controller:
-            try:
-                from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
-                dispatcher = ExternalAgentDispatcher(self.settings_manager)
-                sent = dispatcher.retry_pending(manual=True)
-                from app.destinations.external_outbox import ExternalOutbox
-                stats = ExternalOutbox().get_stats()
-                self.outbox_status_label.setText(
-                    f"Local Outbox: {stats['pending']} pending, {stats['sent']} sent, {stats['dead_letter']} stuck"
-                )
-                QMessageBox.information(self, "Outbox Retry", f"Retried pending tasks. Sent {sent} tasks successfully.")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to retry outbox:\n{e}")
+            self.controller._retry_pending_outbox(manual=True)
+            QMessageBox.information(
+                self, 
+                "Outbox Retry Started", 
+                "Retry and status reconciliation started in the background. The counters will refresh automatically."
+            )
+
+    def view_outbox(self) -> None:
+        """Opens the outbox task manager dialog."""
+        from app.ui.outbox_dialog import OutboxDialog
+        dialog = OutboxDialog(self)
+        dialog.exec()
+        self.refresh_outbox_label()
+
+    def refresh_outbox_label(self) -> None:
+        """Refreshes the outbox stats display label from the database state."""
+        try:
+            from app.destinations.external_outbox import ExternalOutbox
+            stats = ExternalOutbox().get_stats()
+            pending = stats.get("pending", 0) + stats.get("sending", 0)
+            sent = stats.get("sent", 0) + stats.get("completed", 0) + stats.get("processing", 0)
+            stuck = stats.get("dead_letter", 0)
+            self.outbox_status_label.setText(
+                f"Local Outbox: {pending} pending, {sent} sent, {stuck} stuck"
+            )
+        except Exception:
+            pass
 
 def prompt_first_launch_vault_picker(settings_manager: SettingsManager) -> str:
     """Checks if vault path is configured. If not, shows a folder dialog picker."""

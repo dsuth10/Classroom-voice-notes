@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
@@ -27,6 +28,7 @@ def mock_outbox(tmp_path: Path) -> ExternalOutbox:
     db_file = tmp_path / "test_dispatcher_outbox.db"
     return ExternalOutbox(db_file)
 
+@patch.dict(os.environ, {"CVN_BROKER_ENV": "staging"})
 @patch("app.config.keyring_store.get_secret")
 @patch("app.ollama_router.policy_gate.PolicyGate.is_external_dispatch_allowed")
 @patch("app.destinations.external_agent_dispatcher.httpx.post")
@@ -39,7 +41,7 @@ def test_dispatcher_dispatch_success(
     tmp_path: Path
 ) -> None:
     # Setup mocks
-    mock_keyring.side_effect = lambda ref: "mock_secret_val" if ref in ("cvn_hmac_secret", "cvn_bearer_token") else None
+    mock_keyring.side_effect = lambda ref: "mock_secret_val" if "cvn_broker_hmac_secret" in ref or "cvn_broker_bearer_token" in ref or ref in ("cvn_hmac_secret", "cvn_bearer_token") else None
     mock_policy.return_value = (True, ["check1", "check2"])
     
     # Setup network success
@@ -94,6 +96,7 @@ def test_dispatcher_dispatch_disabled(
     assert success is False
     assert mock_keyring.call_count == 0
 
+@patch.dict(os.environ, {"CVN_BROKER_ENV": "staging"})
 @patch("app.config.keyring_store.get_secret")
 @patch("app.ollama_router.policy_gate.PolicyGate.is_external_dispatch_allowed")
 @patch("app.destinations.external_agent_dispatcher.httpx.post")
@@ -106,7 +109,7 @@ def test_dispatcher_dispatch_network_failure(
     tmp_path: Path
 ) -> None:
     # Setup mocks
-    mock_keyring.side_effect = lambda ref: "mock_secret_val" if ref in ("cvn_hmac_secret", "cvn_bearer_token") else None
+    mock_keyring.side_effect = lambda ref: "mock_secret_val" if "cvn_broker_hmac_secret" in ref or "cvn_broker_bearer_token" in ref or ref in ("cvn_hmac_secret", "cvn_bearer_token") else None
     mock_policy.return_value = (True, ["check1", "check2"])
     
     # Network throws error

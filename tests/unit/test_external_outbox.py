@@ -95,3 +95,62 @@ def test_expire_old(outbox: ExternalOutbox) -> None:
     stats = outbox.get_stats()
     assert stats["dead_letter"] == 1
     assert stats["pending"] == 0
+
+def test_selective_dead_letter_retry(outbox: ExternalOutbox, monkeypatch) -> None:
+    # 1. Enqueue task and mark it dead_letter
+    local_id = outbox.enqueue("CVN-10", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem10", "nonce10")
+    outbox.mark_sending(local_id)
+    outbox.mark_failed(local_id, "Max attempts reached", max_attempts=1)
+    
+    assert outbox.get_stats()["dead_letter"] == 1
+
+    # Mock environment to staging
+    monkeypatch.setenv("CVN_BROKER_ENV", "staging")
+
+    # 2. Selective retry dead_letter task
+    res = outbox.retry_dead_letter_task(local_id)
+    assert res is True
+    
+    # Verify stats
+    stats = outbox.get_stats()
+    assert stats["pending"] == 1
+    assert stats["dead_letter"] == 0
+
+def test_selective_dead_letter_retry_wrong_env(outbox: ExternalOutbox, monkeypatch) -> None:
+    # Task has staging URL
+    local_id = outbox.enqueue("CVN-11", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem11", "nonce11")
+    outbox.mark_sending(local_id)
+    outbox.mark_failed(local_id, "Max attempts reached", max_attempts=1)
+
+    # Set env to production
+    monkeypatch.setenv("CVN_BROKER_ENV", "production")
+
+    # Retry should fail because URL doesn't match production
+    res = outbox.retry_dead_letter_task(local_id)
+    assert res is False
+    assert outbox.get_stats()["dead_letter"] == 1
+
+def test_selective_dead_letter_retry_non_dead_letter(outbox: ExternalOutbox, monkeypatch) -> None:
+    local_id = outbox.enqueue("CVN-12", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem12", "nonce12")
+    monkeypatch.setenv("CVN_BROKER_ENV", "staging")
+    
+    # Try to retry a task that is still 'pending'
+    res = outbox.retry_dead_letter_task(local_id)
+    assert res is False
+
+def test_archive_dead_letter_task(outbox: ExternalOutbox) -> None:
+    local_id = outbox.enqueue("CVN-13", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem13", "nonce13")
+    outbox.mark_sending(local_id)
+    outbox.mark_failed(local_id, "Max attempts reached", max_attempts=1)
+
+    # Archive it
+    res = outbox.archive_dead_letter_task(local_id)
+    assert res is True
+
+    stats = outbox.get_stats()
+    assert stats["archived"] == 1
+    assert stats["dead_letter"] == 0
+
+    # Ensure archived task cannot be retried
+    res_retry = outbox.retry_dead_letter_task(local_id)
+    assert res_retry is False

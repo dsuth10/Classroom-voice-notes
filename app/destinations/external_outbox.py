@@ -33,9 +33,23 @@ class ExternalOutbox:
                     sent_at         TEXT,
                     remote_msg_id   TEXT,
                     idempotency_key TEXT NOT NULL UNIQUE,
-                    nonce           TEXT NOT NULL
+                    nonce           TEXT NOT NULL,
+                    archived_at     TEXT,
+                    note_path       TEXT
                 );
             """)
+            # Migration: add archived_at if it is missing
+            try:
+                conn.execute("ALTER TABLE outbox ADD COLUMN archived_at TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            # Migration: add note_path if it is missing
+            try:
+                conn.execute("ALTER TABLE outbox ADD COLUMN note_path TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     def enqueue(
@@ -45,7 +59,8 @@ class ExternalOutbox:
         payload_json: str,
         payload_hash: str,
         idempotency_key: str,
-        nonce: str
+        nonce: str,
+        note_path: Optional[str] = None
     ) -> int:
         """Enqueues a new pending task in the local outbox."""
         now_str = datetime.now(timezone.utc).isoformat()
@@ -55,10 +70,10 @@ class ExternalOutbox:
                 """
                 INSERT INTO outbox (
                     task_id, created_at, endpoint_url, payload_json, payload_hash, 
-                    status, attempt_count, next_retry_at, idempotency_key, nonce
-                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+                    status, attempt_count, next_retry_at, idempotency_key, nonce, note_path
+                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
                 """,
-                (task_id, now_str, endpoint_url, payload_json, payload_hash, now_str, idempotency_key, nonce)
+                (task_id, now_str, endpoint_url, payload_json, payload_hash, now_str, idempotency_key, nonce, note_path)
             )
             conn.commit()
             local_id = cursor.lastrowid
@@ -66,20 +81,86 @@ class ExternalOutbox:
             log_audit_event("OUTBOX_ENQUEUED", "outbox", f"Task {task_id} enqueued locally (local_id: {local_id})")
             return local_id
 
-    def reset_dead_letter_tasks(self) -> None:
-        """Resets all 'dead_letter' tasks back to 'pending' with 0 attempts and current time for retry."""
+    def get_dead_letter_tasks(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """Returns tasks in dead_letter status (ordered by local_id desc)."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT * FROM outbox
+                WHERE status = 'dead_letter'
+                ORDER BY local_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def retry_dead_letter_task(self, local_id: int) -> bool:
+        """Atomically retries a single dead_letter task, resetting attempts and verifying environment."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT endpoint_url, status FROM outbox WHERE local_id = ?", (local_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            endpoint_url = row["endpoint_url"]
+            status = row["status"]
+
+        if status != "dead_letter":
+            return False
+
+        # Validate environment match for endpoint_url (CVN-BL-014)
+        from app.config.environment import get_broker_env
+        try:
+            env = get_broker_env()
+        except Exception:
+            return False
+
+        if env == "staging":
+            if "ukqkkgzimhtjhlnmlyao" not in endpoint_url:
+                log_audit_event("OUTBOX_RETRY_REFUSED", "outbox", f"Refused to retry task {local_id}: URL does not target staging.")
+                return False
+        elif env == "production":
+            if "slvzyasosjiteimonzen" not in endpoint_url:
+                log_audit_event("OUTBOX_RETRY_REFUSED", "outbox", f"Refused to retry task {local_id}: URL does not target production.")
+                return False
+        else:
+            return False
+
         now_str = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE outbox
-                SET status = 'pending', attempt_count = 0, next_retry_at = ?, last_error = NULL
-                WHERE status = 'dead_letter'
+                SET status = 'pending', attempt_count = 0, last_error = NULL, next_retry_at = ?
+                WHERE local_id = ? AND status = 'dead_letter'
                 """,
-                (now_str,)
+                (now_str, local_id)
             )
             conn.commit()
-            log_audit_event("OUTBOX_DEAD_LETTER_RESET", "outbox", "Reset all dead_letter tasks to pending for manual retry")
+            updated = cursor.rowcount == 1
+            if updated:
+                log_audit_event("OUTBOX_DEAD_LETTER_RETRY", "outbox", f"Reset dead_letter task local_id={local_id} to pending")
+            return updated
+
+    def archive_dead_letter_task(self, local_id: int) -> bool:
+        """Moves a dead_letter task to archived status, setting archived_at."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                UPDATE outbox
+                SET status = 'archived', archived_at = ?
+                WHERE local_id = ? AND status = 'dead_letter'
+                """,
+                (now_str, local_id)
+            )
+            conn.commit()
+            updated = cursor.rowcount == 1
+            if updated:
+                log_audit_event("OUTBOX_DEAD_LETTER_ARCHIVED", "outbox", f"Archived dead_letter task local_id={local_id}")
+            return updated
 
     def mark_sending(self, local_id: int) -> None:
         """Marks a task as sending and increments the attempt count."""
@@ -208,9 +289,45 @@ class ExternalOutbox:
                 log_audit_event("OUTBOX_EXPIRY", "outbox", f"Expired {count} pending tasks older than {days} days to dead_letter")
             return count
 
+    def get_unfinished_tasks(self) -> List[Dict[str, Any]]:
+        """Returns all outbox records that are in 'sent' or 'processing' status."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT * FROM outbox
+                WHERE status IN ('sent', 'processing')
+                ORDER BY local_id ASC
+                """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_task_status(
+        self, 
+        local_id: int, 
+        status: str, 
+        last_error: Optional[str] = None, 
+        remote_msg_id: Optional[str] = None
+    ) -> None:
+        """Explicitly updates the status, last_error, and remote_msg_id of a task."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET status = ?, last_error = ?, remote_msg_id = ?
+                WHERE local_id = ?
+                """,
+                (status, last_error, remote_msg_id, local_id)
+            )
+            conn.commit()
+            log_audit_event("OUTBOX_STATUS_UPDATED", "outbox", f"Task local_id={local_id} updated to status={status}")
+
     def get_stats(self) -> Dict[str, int]:
         """Returns the counts of messages in each status."""
-        stats = {"pending": 0, "sending": 0, "sent": 0, "failed": 0, "dead_letter": 0}
+        stats = {
+            "pending": 0, "sending": 0, "sent": 0, "failed": 0, 
+            "dead_letter": 0, "archived": 0, "completed": 0, "processing": 0
+        }
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("SELECT status, COUNT(*) FROM outbox GROUP BY status")
             for row in cursor.fetchall():

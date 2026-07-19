@@ -15,6 +15,7 @@ class AppController(QObject):
     note_saved = Signal(str)
     pipeline_finished = Signal(str)
     audio_level_updated = Signal(float)
+    outbox_processed = Signal(int, int)
 
     def __init__(self, settings_manager: SettingsManager) -> None:
         super().__init__()
@@ -66,9 +67,11 @@ class AppController(QObject):
 
         # Initialize and start the outbox retry timer (every 60 seconds)
         self.outbox_retry_timer = QTimer(self)
-        self.outbox_retry_timer.timeout.connect(self._retry_pending_outbox)
+        self.outbox_retry_timer.timeout.connect(lambda: self._retry_pending_outbox(manual=False))
         if self.settings_manager.get("external_agent.enabled"):
             self.outbox_retry_timer.start(60000)
+            # Trigger one outbox check shortly after startup in background
+            QTimer.singleShot(2000, lambda: self._retry_pending_outbox(manual=False))
 
     def set_state(self, new_state: str) -> None:
         old_state = self.state
@@ -340,6 +343,7 @@ class AppController(QObject):
             self.outbox_retry_timer.stop()
             if self.settings_manager.get("external_agent.enabled"):
                 self.outbox_retry_timer.start(60000)
+                QTimer.singleShot(2000, lambda: self._retry_pending_outbox(manual=False))
 
     def cleanup(self) -> None:
         """Gracefully stops all background workers and the audio stream. Call before app exit."""
@@ -388,14 +392,30 @@ class AppController(QObject):
             log_audit_event("DAILY_SUMMARY_TRIGGER_ERROR", "controller", f"Failed to generate summary: {e}")
 
     def _retry_pending_outbox(self, manual: bool = False) -> None:
-        """Retries sending any pending tasks from the local SQLite outbox."""
-        if self.settings_manager.get("external_agent.enabled"):
-            try:
-                from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
-                dispatcher = ExternalAgentDispatcher(self.settings_manager)
-                dispatcher.retry_pending(manual=manual)
-            except Exception as e:
-                log_audit_event("OUTBOX_RETRY_TIMER_ERROR", "controller", f"Failed to retry pending tasks: {e}")
+        """Starts the background worker to retry sending pending tasks and reconcile statuses."""
+        if not self.settings_manager.get("external_agent.enabled"):
+            return
+        
+        # Prevent starting multiple workers simultaneously
+        if hasattr(self, "outbox_worker") and self.outbox_worker.isRunning():
+            return
+
+        try:
+            from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
+            dispatcher = ExternalAgentDispatcher(self.settings_manager)
+            
+            from app.destinations.outbox_worker import OutboxWorker
+            self.outbox_worker = OutboxWorker(dispatcher)
+            self.outbox_worker.manual = manual
+            self.outbox_worker.finished.connect(self._on_outbox_worker_finished)
+            self.outbox_worker.start()
+        except Exception as e:
+            log_audit_event("OUTBOX_RETRY_TIMER_ERROR", "controller", f"Failed to start outbox background worker: {e}")
+
+    def _on_outbox_worker_finished(self, sent_count: int, reconciled_count: int) -> None:
+        if sent_count > 0 or reconciled_count > 0:
+            log_audit_event("OUTBOX_TIMER_COMPLETE", "controller", f"Outbox worker completed. Sent {sent_count}, reconciled {reconciled_count}.")
+        self.outbox_processed.emit(sent_count, reconciled_count)
 
 
 
