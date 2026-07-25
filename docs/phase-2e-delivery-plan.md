@@ -90,13 +90,13 @@ Gate:
 
 ### 5. Add automated pull-request gates
 
-Status: **Pending**
+Status: **Complete locally; awaiting the first GitHub Actions run**
 
-- [ ] Run unit and safe integration tests in GitHub Actions.
-- [ ] Run Ruff and mypy.
-- [ ] Add secret scanning.
-- [ ] Reject tracked `scratch/` and `supabase/.temp/` files.
-- [ ] Verify required repository documentation.
+- [x] Run unit and safe integration tests in GitHub Actions.
+- [x] Run Ruff and mypy.
+- [x] Add secret scanning.
+- [x] Reject tracked `scratch/` and `supabase/.temp/` files.
+- [x] Verify required repository documentation.
 
 Gate:
 

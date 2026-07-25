@@ -214,6 +214,7 @@ Run the local quality gates:
 uv run pytest tests
 uv run ruff check app tests scripts run.py
 uv run mypy app
+uv run python scripts/check_repository_hygiene.py
 ```
 
 Safe local and fake-gateway tests run without live credentials. Tests that
@@ -222,6 +223,10 @@ gateway are skipped unless their explicit environment variables and secrets
 are supplied.
 
 Never use real classroom data in tests.
+
+GitHub Actions runs the same locked-dependency quality gates on pull requests
+and changes to `main`. A separate read-only Gitleaks job scans commit history
+for accidentally committed credentials.
 
 ## Repository structure
 
