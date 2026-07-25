@@ -142,3 +142,53 @@ def test_controller_reload_settings(qapp, settings_manager, mock_audio_component
     
     # After reload, the wake word worker should be stopped/removed
     assert controller.wakeword_worker is None
+
+
+def test_controller_starts_only_one_outbox_worker(
+    qapp,
+    settings_manager,
+    mock_audio_components,
+) -> None:
+    settings_manager.set("external_agent.enabled", True)
+    controller = AppController(settings_manager)
+
+    with mock.patch(
+        "app.destinations.external_agent_dispatcher.ExternalAgentDispatcher"
+    ), mock.patch("app.destinations.outbox_worker.OutboxWorker") as worker_class:
+        worker = mock.MagicMock()
+        worker.isRunning.return_value = False
+        worker_class.return_value = worker
+
+        controller._retry_pending_outbox(manual=True)
+
+        assert controller.outbox_worker is worker
+        assert worker.manual is True
+        worker.processed.connect.assert_called_once_with(
+            controller._on_outbox_worker_finished
+        )
+        worker.finished.connect.assert_called_once_with(
+            controller._on_outbox_thread_finished
+        )
+        worker.start.assert_called_once()
+
+        worker.isRunning.return_value = True
+        controller._retry_pending_outbox(manual=False)
+        worker_class.assert_called_once()
+
+
+def test_controller_interrupts_active_outbox_worker_on_cleanup(
+    qapp,
+    settings_manager,
+    mock_audio_components,
+) -> None:
+    controller = AppController(settings_manager)
+    worker = mock.MagicMock()
+    worker.isRunning.side_effect = [True, False]
+    worker.wait.return_value = True
+    controller.outbox_worker = worker
+
+    controller.cleanup()
+
+    worker.requestInterruption.assert_called_once()
+    worker.wait.assert_called_once_with(17000)
+    assert controller.outbox_worker is None

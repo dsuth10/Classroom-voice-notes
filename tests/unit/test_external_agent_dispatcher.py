@@ -200,3 +200,51 @@ def test_retry_pending_applies_retention_before_transmission(
     assert dispatcher.retry_pending() == 0
     assert mock_outbox.get_stats()["dead_letter"] == 1
     mock_keyring.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("target_agent", "persist_target"),
+    [("hermes", True), ("openclaw", False)],
+)
+def test_reconcile_status_preserves_authoritative_target_agent(
+    target_agent: str,
+    persist_target: bool,
+    mock_settings: MagicMock,
+    mock_outbox: ExternalOutbox,
+    tmp_path: Path,
+) -> None:
+    note_file = tmp_path / f"{target_agent}-task.md"
+    note_file.write_text("---\nstatus: sent\n---\nTask note", encoding="utf-8")
+    payload_json = json.dumps({"target_agent": target_agent})
+    local_id = mock_outbox.enqueue(
+        task_id=f"CVN-{target_agent.upper()}",
+        endpoint_url=(
+            "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/"
+            "cvn-submit-task"
+        ),
+        payload_json=payload_json,
+        payload_hash="hash",
+        idempotency_key=f"idem-{target_agent}",
+        nonce=f"nonce-{target_agent}",
+        note_path=str(note_file),
+        target_agent=target_agent if persist_target else None,
+    )
+    mock_outbox.mark_sent(local_id, "remote-id")
+    dispatcher = ExternalAgentDispatcher(mock_settings, mock_outbox)
+
+    with patch.object(
+        dispatcher,
+        "check_task_status",
+        return_value={
+            "status": "completed",
+            "completed_at": "2026-07-25T12:00:00+10:00",
+            "result_summary": "Synthetic result",
+        },
+    ):
+        assert dispatcher.reconcile_statuses() == 1
+
+    note_content = note_file.read_text(encoding="utf-8")
+    assert f"- **Agent:** {target_agent.capitalize()}" in note_content
+    assert "status: completed" in note_content
+    assert "Synthetic result" in note_content
+    assert mock_outbox.get_stats()["completed"] == 1

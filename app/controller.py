@@ -33,6 +33,7 @@ class AppController(QObject):
         self.wakeword_worker: Any = None
         self.command_worker: Any = None
         self.pipeline_worker: Any = None
+        self.outbox_worker: Any = None
         
         self._is_cancelled = False
         
@@ -356,6 +357,17 @@ class AppController(QObject):
             self.index_timer.stop()
         if hasattr(self, 'outbox_retry_timer') and self.outbox_retry_timer:
             self.outbox_retry_timer.stop()
+        if self.outbox_worker:
+            if self.outbox_worker.isRunning():
+                self.outbox_worker.requestInterruption()
+                if not self.outbox_worker.wait(17000):
+                    log_audit_event(
+                        "OUTBOX_WORKER_SHUTDOWN_TIMEOUT",
+                        "controller",
+                        "Outbox worker did not stop before the shutdown timeout.",
+                    )
+            if not self.outbox_worker.isRunning():
+                self.outbox_worker = None
         self._stop_timers()
         self._stop_wake_word_worker()
         self._stop_command_worker()
@@ -397,7 +409,7 @@ class AppController(QObject):
             return
         
         # Prevent starting multiple workers simultaneously
-        if hasattr(self, "outbox_worker") and self.outbox_worker.isRunning():
+        if self.outbox_worker and self.outbox_worker.isRunning():
             return
 
         try:
@@ -407,7 +419,8 @@ class AppController(QObject):
             from app.destinations.outbox_worker import OutboxWorker
             self.outbox_worker = OutboxWorker(dispatcher)
             self.outbox_worker.manual = manual
-            self.outbox_worker.finished.connect(self._on_outbox_worker_finished)
+            self.outbox_worker.processed.connect(self._on_outbox_worker_finished)
+            self.outbox_worker.finished.connect(self._on_outbox_thread_finished)
             self.outbox_worker.start()
         except Exception as e:
             log_audit_event("OUTBOX_RETRY_TIMER_ERROR", "controller", f"Failed to start outbox background worker: {e}")
@@ -416,6 +429,13 @@ class AppController(QObject):
         if sent_count > 0 or reconciled_count > 0:
             log_audit_event("OUTBOX_TIMER_COMPLETE", "controller", f"Outbox worker completed. Sent {sent_count}, reconciled {reconciled_count}.")
         self.outbox_processed.emit(sent_count, reconciled_count)
+
+    def _on_outbox_thread_finished(self) -> None:
+        worker = self.sender()
+        if worker is self.outbox_worker:
+            self.outbox_worker = None
+        if worker is not None:
+            worker.deleteLater()
 
 
 

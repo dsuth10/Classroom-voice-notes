@@ -5,6 +5,11 @@
 **Environment:** Staging only  
 **Production status:** Not authorised
 
+This plan supersedes the unpublished post-Phase 2C roadmap commit `f37c2fb`
+on the local `docs/phase-2c-closure` branch. That branch is retained for
+history until normal repository cleanup; current execution status belongs in
+this document.
+
 ## Objective
 
 Complete the operational-hardening milestone with a fail-closed outbox,
@@ -52,14 +57,14 @@ Gate:
 
 ### 3. Complete regression coverage
 
-Status: **Next**
+Status: **Complete locally**
 
-- [ ] Test the background outbox worker success and failure paths.
-- [ ] Test settings counter refresh after worker completion.
-- [ ] Test selective retry and archive confirmation in the outbox dialog.
-- [ ] Test shutdown while an outbox worker is active.
-- [ ] Test status reconciliation for both Hermes and OpenClaw tasks.
-- [ ] Run the full safe integration suite.
+- [x] Test the background outbox worker success and failure paths.
+- [x] Test settings counter refresh after worker completion.
+- [x] Test selective retry and archive confirmation in the outbox dialog.
+- [x] Test shutdown while an outbox worker is active.
+- [x] Test status reconciliation for both Hermes and OpenClaw tasks.
+- [x] Run the full safe integration suite.
 
 Gate:
 
@@ -69,14 +74,14 @@ Gate:
 
 ### 4. Align documentation and repository metadata
 
-Status: **Pending**
+Status: **Complete locally**
 
-- [ ] Update the README architecture to show the Supabase/OpenClaw broker path.
-- [ ] Change documented Python support from 3.9+ to 3.11+.
-- [ ] Correct the audit-log location.
-- [ ] Document outbox recovery and environment selection.
-- [ ] Add the referenced MIT licence file or correct the licence claim.
-- [ ] Reconcile the unpublished `docs/phase-2c-closure` roadmap commit.
+- [x] Update the README architecture to show the Supabase/OpenClaw broker path.
+- [x] Change documented Python support from 3.9+ to 3.11+.
+- [x] Correct the audit-log location.
+- [x] Document outbox recovery and environment selection.
+- [x] Add the referenced MIT licence file or correct the licence claim.
+- [x] Reconcile the unpublished `docs/phase-2c-closure` roadmap commit.
 
 Gate:
 

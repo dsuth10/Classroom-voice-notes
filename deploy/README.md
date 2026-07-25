@@ -1,35 +1,45 @@
-# Phase 2C.2 VPS Provisioning and Live Staging Runbook
+# OpenClaw Staging Worker Runbook
 
-This document details the step-by-step procedure for provisioning, configuring, and verifying the CVN OpenClaw worker on the staging VPS.
+This runbook provisions and verifies the Classroom Voice Notes OpenClaw worker
+in the Supabase staging environment.
 
----
+It does not authorise production deployment, public gateway exposure,
+production credentials or real classroom data.
 
-## 📋 Prerequisites & Safety Rules
+## Current baseline
 
-1. **Staging Isolation:** Only target the Supabase staging project `ukqkkgzimhtjhlnmlyao` and registered staging credentials.
-2. **Gateway Protection:** Do NOT expose OpenClaw port `18789` publicly. It must remain loopback-only (`127.0.0.1`).
-3. **No Secrets in History:** Never pass tokens or secrets in command-line arguments. Load them from files, environment files, or systemd credentials.
-4. **Clean Code:** Deployed code must match the exact Git commit from `feature/phase-2c2-vps-staging-worker`.
+- Repository: `dsuth10/Classroom-voice-notes`
+- Verified Phase 2C merge: `4afd67d7ffed75a033c564b3860d9177274e65d2`
+- Verified tag: `cvn-broker-phase-2c-staging-complete`
+- Service unit: `cvn-openclaw-staging-worker.service`
+- Service account: `cvn-worker`
+- Checkout: `/opt/cvn-worker`
+- Broker environment: `staging`
+- Target agent: `openclaw`
+- Gateway: loopback on port `18789`
 
----
+Phase 2E code must not be deployed merely because it exists on a feature
+branch. Deploy it only after its pull request, quality gates, review and
+synthetic staging acceptance have passed.
 
-## 🤖 OpenClaw Gateway Lifecycle & Supervisor
+## Safety rules
 
-The staging VPS runs OpenClaw with the following supervisor structure:
-*   **Supervisor:** Managed as a **systemd user service** for the `root` user (`openclaw-gateway.service`, defined at `/root/.config/systemd/user/openclaw-gateway.service`).
-*   **Linger Configuration:** systemd lingering is **enabled** for the `root` user (via `/var/lib/systemd/linger/root`), which ensures root's user manager runs continuously on boot and user-level units stay active without an active SSH session.
-*   **Failover / Restart Policy:** Configured with `Restart=always` and `RestartSec=5s`.
-*   **Binding:** Bound exclusively to the loopback interface on port `18789` (`127.0.0.1:18789` and `[::1]:18789`).
-*   **Dependencies:** The CVN staging worker runs as a system-level unit under an unprivileged `cvn-worker` account. Because system units cannot declare systemd dependencies on user units, the CVN worker has **no direct system-unit dependency** on the OpenClaw service. Instead, it relies on a robust `ExecStartPre` connection check (`deploy/wait_for_gateway.py`) that waits for loopback port 18789 to be ready before starting.
+1. Use only the staging Supabase project `ukqkkgzimhtjhlnmlyao`.
+2. Use only the registered staging key ID, bearer/HMAC pair and worker ID.
+3. Keep the OpenClaw gateway on `127.0.0.1` and `::1`.
+4. Never place credentials in Git, shell history, arguments, logs or screenshots.
+5. Use synthetic, non-sensitive tasks only.
+6. Verify the exact Git commit before starting the service.
+7. Stop on any environment, identity, endpoint or gateway ambiguity.
 
----
+See [Environment and Credential Operations](../docs/operations/environment-and-credentials.md)
+for the desktop environment and credential boundary.
 
-## 🛠️ Step 1: VPS Account and Layout Setup
+## 1. Create the service account and layout
 
-Run the following commands on the VPS as root or using sudo:
+Run as an authorised VPS administrator:
 
 ```bash
-# 1. Create the unprivileged cvn-worker service account
 sudo useradd \
   --system \
   --home /var/lib/cvn-worker \
@@ -37,237 +47,243 @@ sudo useradd \
   --shell /usr/sbin/nologin \
   cvn-worker
 
-# 2. Setup the application directory
 sudo mkdir -p /opt/cvn-worker
-sudo chown -R $USER:cvn-worker /opt/cvn-worker
+sudo chown -R "$USER":cvn-worker /opt/cvn-worker
 sudo chmod -R 750 /opt/cvn-worker
 
-# 3. Setup the credential directory
 sudo mkdir -p /etc/cvn/credentials
 sudo chown -R root:cvn-worker /etc/cvn/credentials
-sudo chmod 750 /etc/cvn/credentials
+sudo chmod 550 /etc/cvn/credentials
 ```
 
----
+If the account already exists, verify it rather than recreating it:
 
-## 📦 Step 2: Deploy Codebase and Virtual Environment
+```bash
+getent passwd cvn-worker
+id cvn-worker
+```
 
-Clone the repository and install dependencies inside `/opt/cvn-worker`:
+## 2. Align the checkout
+
+Clone the repository if required, then align to the reviewed deployment commit:
 
 ```bash
 cd /opt/cvn-worker
-
-# Clone if not already present, or fetch the new branch
-git fetch origin
-git switch feature/phase-2c2-vps-staging-worker
-git pull --ff-only
-
-# Verify the deployed commit matches the local feature commit
+git fetch --tags origin
+git switch main
+git pull --ff-only origin main
+git status --short
 git rev-parse HEAD
+```
 
-# Setup virtual environment
-python3 -m venv .venv
+The working tree must be clean. Compare the reported commit with the exact
+commit approved for this deployment.
+
+For the Phase 2C staging baseline:
+
+```bash
+git rev-parse cvn-broker-phase-2c-staging-complete
+```
+
+Expected:
+
+```text
+4afd67d7ffed75a033c564b3860d9177274e65d2
+```
+
+Do not merge or retain obsolete pre-history-rewrite feature branches on the
+VPS.
+
+## 3. Install the Python environment
+
+```bash
+cd /opt/cvn-worker
+python3.11 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install -e .
-
-# Confirm imports work
 .venv/bin/python -c "from app.destinations.openclaw_adapter import OpenClawAdapter"
 ```
 
----
+The worker requires Python 3.11 or newer.
 
-## 🔑 Step 3: Secret Provisioning (Choose Method A or B)
+## 4. Provision encrypted credentials
 
-Get the fresh staging-only credentials from your password vault:
-- **Broker Bearer Token** (Supabase Edge Function header auth)
-- **Broker HMAC Secret** (Payload signature verification)
-- **OpenClaw Gateway Token** (Local OpenClaw HTTP API key)
+The checked-in service unit expects three systemd encrypted credential files:
 
-### Method A: systemd Encrypted Credentials (Recommended)
+```text
+/etc/cvn/credentials/cvn-broker-bearer
+/etc/cvn/credentials/cvn-broker-hmac
+/etc/cvn/credentials/openclaw-gateway-token
+```
 
-*Requires systemd v250+.* Check systemd version using `systemd-analyze --version`.
+Provision these through the approved password-vault and `systemd-creds`
+workflow. This repository intentionally does not include commands that place
+secret values on a shell command line.
 
-Create the encrypted credentials directly for the service unit context:
+Required properties:
+
+- the files contain encrypted systemd credentials, not plaintext;
+- owner is `root`;
+- group is `cvn-worker`;
+- the directory is not writable by `cvn-worker`;
+- staging values are distinct from all production values; and
+- values are never printed during verification.
+
+Verify only metadata:
 
 ```bash
-# Set permissions temporarily to allow writing plaintext files
-sudo chmod 700 /etc/cvn/credentials
-
-# Write plaintext secrets to temporary files
-sudo sh -c 'echo "YOUR_BEARER_TOKEN" > /etc/cvn/credentials/broker-bearer.tmp'
-sudo sh -c 'echo "YOUR_HMAC_SECRET" > /etc/cvn/credentials/broker-hmac.tmp'
-sudo sh -c 'echo "YOUR_GATEWAY_TOKEN" > /etc/cvn/credentials/openclaw-gateway-token.tmp'
-
-# Restrict temporary files immediately
-sudo chmod 600 /etc/cvn/credentials/*.tmp
-
-# Encrypt for systemd context using credentials tool
-sudo systemd-creds encrypt --name=cvn-broker-bearer /etc/cvn/credentials/broker-bearer.tmp /etc/cvn/credentials/broker-bearer
-sudo systemd-creds encrypt --name=cvn-broker-hmac /etc/cvn/credentials/broker-hmac.tmp /etc/cvn/credentials/broker-hmac
-sudo systemd-creds encrypt --name=openclaw-gateway-token /etc/cvn/credentials/openclaw-gateway-token.tmp /etc/cvn/credentials/openclaw-gateway-token
-
-# Zero out and remove plaintext temporary files
-sudo dd if=/dev/zero of=/etc/cvn/credentials/broker-bearer.tmp bs=1 count=100 conv=notrunc 2>/dev/null
-sudo dd if=/dev/zero of=/etc/cvn/credentials/broker-hmac.tmp bs=1 count=100 conv=notrunc 2>/dev/null
-sudo dd if=/dev/zero of=/etc/cvn/credentials/openclaw-gateway-token.tmp bs=1 count=100 conv=notrunc 2>/dev/null
-sudo rm /etc/cvn/credentials/*.tmp
-
-# Secure the credential directory permissions
-sudo chmod 550 /etc/cvn/credentials
-sudo chmod 440 /etc/cvn/credentials/*
-sudo chown -R root:cvn-worker /etc/cvn/credentials
+sudo stat \
+  /etc/cvn/credentials/cvn-broker-bearer \
+  /etc/cvn/credentials/cvn-broker-hmac \
+  /etc/cvn/credentials/openclaw-gateway-token
 ```
 
-### Method B: locked-down systemd plaintext Environment File (Fallback)
+If encrypted credentials are unavailable on the host, stop and obtain a
+reviewed provisioning approach. Do not fall back to plaintext environment
+variables or ad-hoc token files.
 
-If systemd encrypted credentials are unsupported, use standard file-based tokens:
+## 5. Verify the OpenClaw gateway boundary
+
+The gateway must be healthy and loopback-only:
 
 ```bash
-# Write plaintext secrets directly to restricted files
-sudo sh -c 'echo -n "YOUR_BEARER_TOKEN" > /etc/cvn/credentials/broker-bearer'
-sudo sh -c 'echo -n "YOUR_HMAC_SECRET" > /etc/cvn/credentials/broker-hmac'
-sudo sh -c 'echo -n "YOUR_GATEWAY_TOKEN" > /etc/cvn/credentials/openclaw-gateway-token'
-
-# Secure files
-sudo chmod 550 /etc/cvn/credentials
-sudo chmod 440 /etc/cvn/credentials/*
-sudo chown -R root:cvn-worker /etc/cvn/credentials
-```
-
-If using **Method B**, edit the service file `/etc/systemd/system/cvn-openclaw-worker.service` to map standard files:
-Replace:
-```ini
-Environment=AGENT_BROKER_BEARER_TOKEN_FILE=%d/cvn-broker-bearer
-Environment=AGENT_BROKER_HMAC_SECRET_FILE=%d/cvn-broker-hmac
-Environment=OPENCLAW_GATEWAY_TOKEN_FILE=%d/openclaw-gateway-token
-
-LoadCredentialEncrypted=cvn-broker-bearer:/etc/cvn/credentials/broker-bearer
-LoadCredentialEncrypted=cvn-broker-hmac:/etc/cvn/credentials/broker-hmac
-LoadCredentialEncrypted=openclaw-gateway-token:/etc/cvn/credentials/openclaw-gateway-token
-```
-With:
-```ini
-Environment=AGENT_BROKER_BEARER_TOKEN_FILE=/etc/cvn/credentials/broker-bearer
-Environment=AGENT_BROKER_HMAC_SECRET_FILE=/etc/cvn/credentials/broker-hmac
-Environment=OPENCLAW_GATEWAY_TOKEN_FILE=/etc/cvn/credentials/openclaw-gateway-token
-```
-
----
-
-## 🤖 Step 4: Configure OpenClaw restricted Agent
-
-Verify the OpenClaw configuration and add the restricted agent `cvn-broker` under the OpenClaw owner account (typically the active user, e.g. `openclaw`):
-
-```bash
-# Add cvn-broker agent with restricted scope
-openclaw agents add cvn-broker \
-  --workspace ~/.openclaw/workspace-cvn-broker \
-  --non-interactive \
-  --json
-
-# Configure responses endpoint to be active
-openclaw config set gateway.http.endpoints.responses.enabled true
-
-# Restart OpenClaw gateway to apply configuration changes
-systemctl --user restart openclaw-gateway.service
-
-# Confirm gateway is healthy and listening on 127.0.0.1:18789
 sudo ss -ltnp | grep 18789
 openclaw gateway status --require-rpc
 ```
 
----
+Acceptable listeners:
 
-## 🔍 Step 5: Environment Diagnostics
-
-To ensure everything is correctly configured, run the non-destructive diagnostic script on the VPS:
-
-```bash
-# Export the environment variables for testing manually
-export CVN_BROKER_ENV=staging
-export CVN_WORKER_ID=vps-worker-id-staging
-export AGENT_BROKER_KEY_ID=vps-worker-staging
-export CVN_TARGET_AGENT=openclaw
-export OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
-
-# Set the credential files (adapt path if using Method A systemd directory vs Method B)
-# For Method B:
-export AGENT_BROKER_BEARER_TOKEN_FILE=/etc/cvn/credentials/broker-bearer
-export AGENT_BROKER_HMAC_SECRET_FILE=/etc/cvn/credentials/broker-hmac
-export OPENCLAW_GATEWAY_TOKEN_FILE=/etc/cvn/credentials/openclaw-gateway-token
-
-# Run diagnostics
-/opt/cvn-worker/.venv/bin/python deploy/diagnose_worker.py
+```text
+127.0.0.1:18789
+[::1]:18789
 ```
 
-*Ensure the diagnostic script exits with `0` and shows `ALL CHECKS PASSED`.*
+Any public, wildcard or non-loopback listener is a blocking failure.
 
----
+The dedicated `cvn-broker` OpenClaw agent must remain text-only and restricted.
+Do not grant browser, email, gateway-administration, unrestricted shell or
+unrestricted filesystem tools as part of this runbook.
 
-## 🚀 Step 6: Install and Start systemd Service
-
-Copy the service file template into the system systemd directory:
+## 6. Install and validate the service
 
 ```bash
-sudo cp deploy/cvn-openclaw-staging-worker.service /etc/systemd/system/cvn-openclaw-worker.service
+cd /opt/cvn-worker
+sudo cp \
+  deploy/cvn-openclaw-staging-worker.service \
+  /etc/systemd/system/cvn-openclaw-staging-worker.service
 
-# Edit files paths if using Method B as described above
-sudo nano /etc/systemd/system/cvn-openclaw-worker.service
+sudo systemd-analyze verify \
+  /etc/systemd/system/cvn-openclaw-staging-worker.service
 
-# Validate and reload daemon
-sudo systemd-analyze verify /etc/systemd/system/cvn-openclaw-worker.service
 sudo systemctl daemon-reload
-
-# Start service (Do NOT enable on boot yet!)
-sudo systemctl start cvn-openclaw-worker.service
-sudo systemctl status cvn-openclaw-worker.service
 ```
 
-Inspect the logs to confirm healthy polling:
-```bash
-sudo journalctl -u cvn-openclaw-worker.service -n 50 --no-pager
+Review the installed unit and confirm:
+
+```text
+CVN_BROKER_ENV=staging
+CVN_TARGET_AGENT=openclaw
+AGENT_BROKER_KEY_ID=vps-worker-staging
+CVN_WORKER_ID=vps-worker-id-staging
+OPENCLAW_GATEWAY_URL=http://127.0.0.1:18789
 ```
 
----
+The service must use `LoadCredentialEncrypted` for all three secret values.
 
-## 🧪 Step 7: Controlled Live Verification Task
-
-From your local Windows machine:
-
-```powershell
-# Submit test task targeting the openclaw agent
-.venv\Scripts\python scripts\submit_test_task_openclaw.py --title "VPS Staging Test" --target "openclaw" --text "Return exactly: CVN_OPENCLAW_STAGING_OK"
-```
-
-Verify that the VPS logs show the claim, execution on loopback gateway, and successful completion.
-Query the task status from the local machine:
-```powershell
-.venv\Scripts\python scripts\check_task_status.py <TASK_ID>
-```
-Confirm:
-- Status is `completed`
-- Result contains `CVN_OPENCLAW_STAGING_OK`
-- No secrets are leaked.
-
----
-
-## 🔄 Step 8: Post-Verification Failure-Path Tests
-
-Run the following negative and recovery tests on the VPS:
-
-1. **Target Separation Check:**
-   Submit a task targeting `hermes`. Confirm the VPS worker does NOT claim it.
-2. **Gateway Interruption:**
-   Stop the gateway (`systemctl --user stop openclaw-gateway.service`). Submit a task. Confirm the worker reports a `retryable` gateway failure and backs off safely. Restart the gateway and confirm automatic recovery.
-3. **Duplicate Completion:**
-   Ensure completing the same task twice is rejected on the broker backend (check that first success remains).
-
----
-
-## 🏁 Step 9: Final Activation
-
-If all gates pass, enable the worker on boot:
+## 7. Start without enabling at boot
 
 ```bash
-sudo systemctl enable cvn-openclaw-worker.service
+sudo systemctl start cvn-openclaw-staging-worker.service
+sudo systemctl status cvn-openclaw-staging-worker.service
+sudo journalctl \
+  -u cvn-openclaw-staging-worker.service \
+  -n 100 \
+  --no-pager
 ```
+
+Expected:
+
+- the banner identifies **Staging**;
+- the gateway preflight passes;
+- polling begins without authentication failures;
+- no credential or payload value appears in logs; and
+- the service does not restart unexpectedly.
+
+Do not enable the service at boot yet.
+
+## 8. Run the synthetic acceptance task
+
+From the authorised Windows development machine:
+
+```powershell
+$env:CVN_BROKER_ENV = "staging"
+uv run python scripts/submit_test_task_openclaw.py `
+  --title "VPS Staging Test" `
+  --target "openclaw" `
+  --text "Return exactly: CVN_OPENCLAW_STAGING_OK"
+```
+
+Query the returned task ID using the signed status client:
+
+```powershell
+uv run python scripts/check_task_status.py CVN-TASK-ID
+```
+
+Acceptance requires:
+
+1. one submission;
+2. one claim by the staging OpenClaw worker;
+3. one loopback gateway execution;
+4. one completion;
+5. final status `completed`;
+6. result summary `CVN_OPENCLAW_STAGING_OK`; and
+7. no raw transcript, audio path, credential or classroom data in remote logs.
+
+## 9. Run failure-path checks
+
+Use synthetic data only.
+
+- Submit a `hermes` task and confirm this worker does not claim it.
+- Stop the gateway, confirm a retryable gateway failure, restart it and confirm
+  recovery.
+- Verify duplicate completion does not replace the original success.
+- Verify invalid authentication returns `401`.
+- Verify cross-worker or wrong-target access returns `403`.
+
+Do not weaken worker allowlists or broker authentication to make a check pass.
+
+## 10. Enable only after acceptance
+
+After the reviewed acceptance evidence passes:
+
+```bash
+sudo systemctl enable cvn-openclaw-staging-worker.service
+sudo systemctl is-enabled cvn-openclaw-staging-worker.service
+```
+
+This enables the staging service only. It is not production promotion.
+
+## Rollback and containment
+
+On authentication, environment, restart, gateway or data-boundary failure:
+
+```bash
+sudo systemctl disable --now cvn-openclaw-staging-worker.service
+sudo systemctl status cvn-openclaw-staging-worker.service
+```
+
+Then:
+
+1. disable the affected staging worker identity at the broker;
+2. preserve sanitised logs and the exact Git commit;
+3. confirm previous credentials are rejected if rotation is required;
+4. leave production identities unchanged;
+5. do not delete broker or outbox evidence; and
+6. require review before restarting.
+
+## Related documentation
+
+- [Phase 2E delivery plan](../docs/phase-2e-delivery-plan.md)
+- [Environment and credential operations](../docs/operations/environment-and-credentials.md)
+- [Outbox recovery](../docs/operations/outbox-recovery.md)
+- [Worker contract](../docs/architecture/003-cvn-worker-contract.md)

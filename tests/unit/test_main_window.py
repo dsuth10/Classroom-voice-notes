@@ -2,9 +2,18 @@ import sys
 from pathlib import Path
 from unittest import mock
 import pytest
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox
 from app.config.settings import SettingsManager
 from app.ui.main_window import MainWindow
+
+
+class FakeController(QObject):
+    audio_level_updated = Signal(float)
+    outbox_processed = Signal(int, int)
+
+    def reload_settings(self) -> None:
+        pass
 
 @pytest.fixture(scope="module")
 def qapp() -> QApplication:
@@ -135,4 +144,34 @@ def test_main_window_reloads_controller(qapp: QApplication, tmp_path: Path) -> N
         window.save_all()
         
         mock_controller.reload_settings.assert_called_once()
+        window.close()
+
+
+def test_main_window_refreshes_outbox_counts_after_worker_completion(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    settings_file = tmp_path / "settings.json"
+    outbox = mock.MagicMock()
+    outbox.get_stats.side_effect = [
+        {"pending": 1, "sending": 0, "sent": 0, "completed": 0, "processing": 0, "dead_letter": 0},
+        {"pending": 0, "sending": 0, "sent": 1, "completed": 1, "processing": 0, "dead_letter": 2},
+    ]
+    controller = FakeController()
+
+    with mock.patch(
+        "app.config.settings.get_config_path",
+        return_value=settings_file,
+    ), mock.patch(
+        "app.destinations.external_outbox.ExternalOutbox",
+        return_value=outbox,
+    ):
+        manager = SettingsManager()
+        window = MainWindow(manager, controller=controller)
+        assert window.outbox_status_label.text() == "Local Outbox: 1 pending, 0 sent, 0 stuck"
+
+        controller.outbox_processed.emit(1, 1)
+        qapp.processEvents()
+
+        assert window.outbox_status_label.text() == "Local Outbox: 0 pending, 2 sent, 2 stuck"
         window.close()

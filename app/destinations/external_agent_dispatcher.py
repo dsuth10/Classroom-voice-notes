@@ -4,7 +4,7 @@ import platform
 import re
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from app.config import keyring_store
 from app.config.settings import SettingsManager
@@ -211,7 +211,11 @@ class ExternalAgentDispatcher:
             self._update_note_frontmatter(Path(note_path), {"status": "dispatch_failed"})
             return False
 
-    def retry_pending(self, manual: bool = False) -> int:
+    def retry_pending(
+        self,
+        manual: bool = False,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> int:
         """Retries all pending tasks in the outbox that are past their next_retry_at time."""
         self.outbox.expire_old(days=7)
         pending_tasks = self.outbox.get_pending()
@@ -221,6 +225,8 @@ class ExternalAgentDispatcher:
         from app.config.environment import validate_broker_endpoint
         approved_tasks = []
         for task in pending_tasks:
+            if should_stop and should_stop():
+                return 0
             try:
                 validate_broker_endpoint(task["endpoint_url"])
                 approved_tasks.append(task)
@@ -258,6 +264,8 @@ class ExternalAgentDispatcher:
 
         sent_count = 0
         for task in approved_tasks:
+            if should_stop and should_stop():
+                break
             local_id = task["local_id"]
             endpoint_url = task["endpoint_url"]
             json_str = task["payload_json"]
@@ -502,7 +510,10 @@ class ExternalAgentDispatcher:
             log_audit_event("STATUS_CHECK_ERROR", "dispatcher", f"HTTP request failed for task {task_id}: {e}")
             return None
 
-    def reconcile_statuses(self) -> int:
+    def reconcile_statuses(
+        self,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> int:
         """Finds sent/processing tasks and reconciles their status from the remote broker."""
         tasks = self.outbox.get_unfinished_tasks()
         if not tasks:
@@ -510,6 +521,8 @@ class ExternalAgentDispatcher:
 
         updated_count = 0
         for task in tasks:
+            if should_stop and should_stop():
+                break
             local_id = task["local_id"]
             task_id = task["task_id"]
             endpoint_url = task["endpoint_url"]

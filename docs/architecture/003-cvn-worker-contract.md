@@ -37,7 +37,7 @@ If `x-cvn-key-id` is omitted, the broker falls back to legacy shared-credential 
   "task": {
     "title": "Short descriptive title",
     "instructions": "Task-specific instructions (JSON string or raw text)",
-    "priority": "low | normal | high | urgent"
+    "priority": "low | normal | high"
   },
   "redactions_applied": [],
   "signed_at": "ISO-8601-UTC-TIMESTAMP",
@@ -46,7 +46,7 @@ If `x-cvn-key-id` is omitted, the broker falls back to legacy shared-credential 
 }
 ```
 
-### 1.2. Claim Task (Worker Request/Response)
+### 1.3. Claim Task (Worker Request/Response)
 * **Endpoint:** `POST /functions/v1/cvn-claim-task`
 * **Request Structure:**
 ```json
@@ -76,7 +76,7 @@ If `x-cvn-key-id` is omitted, the broker falls back to legacy shared-credential 
 }
 ```
 
-### 1.3. Complete Task (Worker Request/Response)
+### 1.4. Complete Task (Worker Request/Response)
 * **Endpoint:** `POST /functions/v1/cvn-complete-task`
 * **Request Structure:**
 ```json
@@ -96,7 +96,7 @@ If `x-cvn-key-id` is omitted, the broker falls back to legacy shared-credential 
 }
 ```
 
-### 1.4. Fail Task (Worker Request/Response)
+### 1.5. Fail Task (Worker Request/Response)
 * **Endpoint:** `POST /functions/v1/cvn-fail-task`
 * **Request Structure:**
 ```json
@@ -120,6 +120,39 @@ If `x-cvn-key-id` is omitted, the broker falls back to legacy shared-credential 
   "retry_count": 1
 }
 ```
+
+### 1.6. Task Status (Client or Authorised Worker)
+
+- **Endpoint:** `GET /functions/v1/cvn-status/{task_id}`
+- **Authentication:** Bearer token plus HMAC signature over the canonical
+  request string.
+- **Replay protection:** `signed_at` and a unique nonce are required.
+
+The safe response may contain:
+
+```json
+{
+  "task_id": "CVN-YYYYMMDD-HHMMSS-XXXX",
+  "status": "pending | claimed | running | completed | failed | dead_letter | manual_review",
+  "target_agent": "hermes | openclaw",
+  "created_at": "ISO-8601-UTC-TIMESTAMP",
+  "claimed_at": "ISO-8601-UTC-TIMESTAMP | null",
+  "completed_at": "ISO-8601-UTC-TIMESTAMP | null",
+  "failed_at": "ISO-8601-UTC-TIMESTAMP | null",
+  "retry_count": 0,
+  "result_summary": "Sanitised result summary | null",
+  "error_message": "Sanitised error | null",
+  "error_code": "SAFE_ERROR_CODE | null"
+}
+```
+
+The status response must not expose the task payload, claim token, queue
+message ID, nonce, idempotency key, raw transcript, audio reference or
+credential material.
+
+The desktop client currently authenticates status requests with the restricted
+legacy bearer/HMAC client path. Registered workers use `x-cvn-key-id` and are
+authorised only for their allowed target agents.
 
 ---
 
