@@ -35,7 +35,8 @@ class ExternalOutbox:
                     idempotency_key TEXT NOT NULL UNIQUE,
                     nonce           TEXT NOT NULL,
                     archived_at     TEXT,
-                    note_path       TEXT
+                    note_path       TEXT,
+                    target_agent    TEXT
                 );
             """)
             # Migration: add archived_at if it is missing
@@ -50,6 +51,12 @@ class ExternalOutbox:
                 conn.commit()
             except sqlite3.OperationalError:
                 pass
+            # Migration: add target_agent if it is missing
+            try:
+                conn.execute("ALTER TABLE outbox ADD COLUMN target_agent TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     def enqueue(
@@ -60,7 +67,8 @@ class ExternalOutbox:
         payload_hash: str,
         idempotency_key: str,
         nonce: str,
-        note_path: Optional[str] = None
+        note_path: Optional[str] = None,
+        target_agent: Optional[str] = None
     ) -> int:
         """Enqueues a new pending task in the local outbox."""
         now_str = datetime.now(timezone.utc).isoformat()
@@ -70,10 +78,22 @@ class ExternalOutbox:
                 """
                 INSERT INTO outbox (
                     task_id, created_at, endpoint_url, payload_json, payload_hash, 
-                    status, attempt_count, next_retry_at, idempotency_key, nonce, note_path
-                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?)
+                    status, attempt_count, next_retry_at, idempotency_key, nonce,
+                    note_path, target_agent
+                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)
                 """,
-                (task_id, now_str, endpoint_url, payload_json, payload_hash, now_str, idempotency_key, nonce, note_path)
+                (
+                    task_id,
+                    now_str,
+                    endpoint_url,
+                    payload_json,
+                    payload_hash,
+                    now_str,
+                    idempotency_key,
+                    nonce,
+                    note_path,
+                    target_agent,
+                )
             )
             conn.commit()
             local_id = cursor.lastrowid
@@ -111,21 +131,15 @@ class ExternalOutbox:
             return False
 
         # Validate environment match for endpoint_url (CVN-BL-014)
-        from app.config.environment import get_broker_env
+        from app.config.environment import validate_broker_endpoint
         try:
-            env = get_broker_env()
-        except Exception:
-            return False
-
-        if env == "staging":
-            if "ukqkkgzimhtjhlnmlyao" not in endpoint_url:
-                log_audit_event("OUTBOX_RETRY_REFUSED", "outbox", f"Refused to retry task {local_id}: URL does not target staging.")
-                return False
-        elif env == "production":
-            if "slvzyasosjiteimonzen" not in endpoint_url:
-                log_audit_event("OUTBOX_RETRY_REFUSED", "outbox", f"Refused to retry task {local_id}: URL does not target production.")
-                return False
-        else:
+            validate_broker_endpoint(endpoint_url)
+        except RuntimeError as exc:
+            log_audit_event(
+                "OUTBOX_RETRY_REFUSED",
+                "outbox",
+                f"Refused to retry task {local_id}: {exc}",
+            )
             return False
 
         now_str = datetime.now(timezone.utc).isoformat()
@@ -182,7 +196,8 @@ class ExternalOutbox:
             conn.execute(
                 """
                 UPDATE outbox
-                SET status = 'sent', sent_at = ?, remote_msg_id = ?, last_error = NULL
+                SET status = 'sent', sent_at = ?, remote_msg_id = ?,
+                    last_error = NULL, next_retry_at = NULL
                 WHERE local_id = ?
                 """,
                 (now_str, remote_msg_id, local_id)
@@ -247,7 +262,7 @@ class ExternalOutbox:
             conn.execute(
                 """
                 UPDATE outbox
-                SET status = 'sent', sent_at = ?, last_error = ?
+                SET status = 'sent', sent_at = ?, last_error = ?, next_retry_at = NULL
                 WHERE local_id = ?
                 """,
                 (now_str, f"Duplicate conflict (409): {error_type}", local_id)
@@ -314,7 +329,7 @@ class ExternalOutbox:
             conn.execute(
                 """
                 UPDATE outbox
-                SET status = ?, last_error = ?, remote_msg_id = ?
+                SET status = ?, last_error = ?, remote_msg_id = ?, next_retry_at = NULL
                 WHERE local_id = ?
                 """,
                 (status, last_error, remote_msg_id, local_id)

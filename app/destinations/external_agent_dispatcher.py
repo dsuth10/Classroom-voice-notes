@@ -1,4 +1,5 @@
 import httpx
+import json
 import platform
 import re
 from pathlib import Path
@@ -81,6 +82,18 @@ class ExternalAgentDispatcher:
         target_agent = self.resolve_agent(transcript, classification_data)
         source_device_id = self.get_source_device_id()
         endpoint_url = self.settings_manager.get("external_agent.endpoint_url")
+
+        try:
+            from app.config.environment import validate_broker_endpoint
+            validate_broker_endpoint(endpoint_url)
+        except RuntimeError as exc:
+            log_audit_event(
+                "EXTERNAL_DISPATCH_BLOCKED",
+                "dispatcher",
+                f"Broker endpoint validation failed: {exc}",
+            )
+            self._update_note_frontmatter(Path(note_path), {"status": "dispatch_failed"})
+            return False
         
         # 4. Build draft payload for policy gate checking
         draft_payload, _, _ = build_payload(
@@ -136,7 +149,8 @@ class ExternalAgentDispatcher:
             payload_hash=payload_hash,
             idempotency_key=payload["idempotency_key"],
             nonce=payload["nonce"],
-            note_path=note_path
+            note_path=note_path,
+            target_agent=target_agent,
         )
 
         # 9. Perform HTTP POST request
@@ -199,8 +213,27 @@ class ExternalAgentDispatcher:
 
     def retry_pending(self, manual: bool = False) -> int:
         """Retries all pending tasks in the outbox that are past their next_retry_at time."""
+        self.outbox.expire_old(days=7)
         pending_tasks = self.outbox.get_pending()
         if not pending_tasks:
+            return 0
+
+        from app.config.environment import validate_broker_endpoint
+        approved_tasks = []
+        for task in pending_tasks:
+            try:
+                validate_broker_endpoint(task["endpoint_url"])
+                approved_tasks.append(task)
+            except RuntimeError as exc:
+                local_id = task["local_id"]
+                self.outbox.mark_sending(local_id)
+                self.outbox.mark_failed(
+                    local_id,
+                    f"Broker endpoint validation failed: {exc}",
+                    max_attempts=1,
+                )
+
+        if not approved_tasks:
             return 0
 
         # Retrieve keys using central environment resolver
@@ -224,7 +257,7 @@ class ExternalAgentDispatcher:
             return 0
 
         sent_count = 0
-        for task in pending_tasks:
+        for task in approved_tasks:
             local_id = task["local_id"]
             endpoint_url = task["endpoint_url"]
             json_str = task["payload_json"]
@@ -399,6 +432,17 @@ class ExternalAgentDispatcher:
 
     def check_task_status(self, endpoint_url: str, task_id: str) -> Optional[Dict[str, Any]]:
         """Queries the cvn-status endpoint for a task, returning its status JSON."""
+        try:
+            from app.config.environment import validate_broker_endpoint
+            validate_broker_endpoint(endpoint_url)
+        except RuntimeError as exc:
+            log_audit_event(
+                "STATUS_CHECK_ERROR",
+                "dispatcher",
+                f"Broker endpoint validation failed for task {task_id}: {exc}",
+            )
+            return None
+
         # Retrieve keys
         try:
             from app.config.environment import get_env_credential_ref
@@ -470,7 +514,14 @@ class ExternalAgentDispatcher:
             task_id = task["task_id"]
             endpoint_url = task["endpoint_url"]
             note_path = task.get("note_path")
-            target_agent = task.get("target_agent") or "openclaw"
+            target_agent = task.get("target_agent")
+            if not target_agent:
+                try:
+                    target_agent = json.loads(task["payload_json"]).get("target_agent")
+                except (json.JSONDecodeError, TypeError):
+                    target_agent = None
+            if target_agent not in ("hermes", "openclaw"):
+                target_agent = "openclaw"
 
             status_data = self.check_task_status(endpoint_url, task_id)
             if not status_data:

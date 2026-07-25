@@ -1,10 +1,11 @@
 # app/destinations/outbox_worker.py
 from PySide6.QtCore import QThread, Signal
+from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
 
 class OutboxWorker(QThread):
     finished = Signal(int, int)  # sent_count, reconciled_count
 
-    def __init__(self, dispatcher) -> None:
+    def __init__(self, dispatcher: ExternalAgentDispatcher) -> None:
         super().__init__()
         self.dispatcher = dispatcher
         self.manual = False

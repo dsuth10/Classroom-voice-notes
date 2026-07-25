@@ -38,6 +38,12 @@ def test_mark_sending_and_sent(outbox: ExternalOutbox) -> None:
     stats = outbox.get_stats()
     assert stats["sent"] == 1
     assert stats["pending"] == 0
+    with sqlite3.connect(outbox.db_path) as conn:
+        next_retry_at = conn.execute(
+            "SELECT next_retry_at FROM outbox WHERE local_id = ?",
+            (local_id,),
+        ).fetchone()[0]
+    assert next_retry_at is None
 
 def test_mark_failed_exponential_backoff(outbox: ExternalOutbox) -> None:
     local_id = outbox.enqueue("CVN-3", "http://test.url", "{}", "hash", "idem3", "nonce3")
@@ -79,6 +85,27 @@ def test_mark_duplicate_409(outbox: ExternalOutbox) -> None:
         row = conn.execute("SELECT * FROM outbox WHERE local_id = ?", (local_id,)).fetchone()
         assert row["status"] == "sent"
         assert "Duplicate conflict" in row["last_error"]
+        assert row["next_retry_at"] is None
+
+
+def test_enqueue_persists_target_agent(outbox: ExternalOutbox) -> None:
+    local_id = outbox.enqueue(
+        "CVN-TARGET",
+        "http://test.url",
+        "{}",
+        "hash",
+        "idem-target",
+        "nonce-target",
+        target_agent="hermes",
+    )
+
+    with sqlite3.connect(outbox.db_path) as conn:
+        target_agent = conn.execute(
+            "SELECT target_agent FROM outbox WHERE local_id = ?",
+            (local_id,),
+        ).fetchone()[0]
+
+    assert target_agent == "hermes"
 
 def test_expire_old(outbox: ExternalOutbox) -> None:
     local_id = outbox.enqueue("CVN-5", "http://test.url", "{}", "hash", "idem5", "nonce5")
@@ -128,6 +155,26 @@ def test_selective_dead_letter_retry_wrong_env(outbox: ExternalOutbox, monkeypat
     # Retry should fail because URL doesn't match production
     res = outbox.retry_dead_letter_task(local_id)
     assert res is False
+    assert outbox.get_stats()["dead_letter"] == 1
+
+
+def test_selective_dead_letter_retry_rejects_lookalike_host(
+    outbox: ExternalOutbox,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_id = outbox.enqueue(
+        "CVN-LOOKALIKE",
+        "https://ukqkkgzimhtjhlnmlyao.supabase.co.evil.example/functions/v1/cvn-submit-task",
+        "{}",
+        "hash",
+        "idem-lookalike",
+        "nonce-lookalike",
+    )
+    outbox.mark_sending(local_id)
+    outbox.mark_failed(local_id, "Max attempts reached", max_attempts=1)
+    monkeypatch.setenv("CVN_BROKER_ENV", "staging")
+
+    assert outbox.retry_dead_letter_task(local_id) is False
     assert outbox.get_stats()["dead_letter"] == 1
 
 def test_selective_dead_letter_retry_non_dead_letter(outbox: ExternalOutbox, monkeypatch) -> None:

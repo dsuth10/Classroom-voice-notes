@@ -1,5 +1,7 @@
 import json
 import os
+import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
@@ -12,7 +14,7 @@ def mock_settings(tmp_path: Path) -> MagicMock:
     settings = MagicMock()
     settings.get.side_effect = lambda k: {
         "external_agent.enabled": True,
-        "external_agent.endpoint_url": "https://ref.supabase.co/functions/v1/cvn-submit",
+        "external_agent.endpoint_url": "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-submit-task",
         "external_agent.hmac_secret_ref": "cvn_hmac_secret",
         "external_agent.bearer_token_ref": "cvn_bearer_token",
         "external_agent.target_agent_default": "hermes",
@@ -70,6 +72,8 @@ def test_dispatcher_dispatch_success(
     # Check outbox is marked sent
     stats = mock_outbox.get_stats()
     assert stats["sent"] == 1
+    unfinished = mock_outbox.get_unfinished_tasks()
+    assert unfinished[0]["target_agent"] == "hermes"
     
     # Check frontmatter was updated to sent
     note_content = note_file.read_text(encoding="utf-8")
@@ -136,3 +140,63 @@ def test_dispatcher_dispatch_network_failure(
     
     note_content = note_file.read_text(encoding="utf-8")
     assert "status: dispatch_failed" in note_content
+
+
+@patch.dict(os.environ, {"CVN_BROKER_ENV": "staging"})
+@patch("app.config.keyring_store.get_secret")
+@patch("app.destinations.external_agent_dispatcher.httpx.post")
+def test_retry_pending_rejects_unapproved_endpoint(
+    mock_post: MagicMock,
+    mock_keyring: MagicMock,
+    mock_settings: MagicMock,
+    mock_outbox: ExternalOutbox,
+) -> None:
+    mock_outbox.enqueue(
+        task_id="CVN-BAD-ENDPOINT",
+        endpoint_url=(
+            "https://ukqkkgzimhtjhlnmlyao.supabase.co.evil.example/"
+            "functions/v1/cvn-submit-task"
+        ),
+        payload_json="{}",
+        payload_hash="hash",
+        idempotency_key="idem-bad-endpoint",
+        nonce="nonce-bad-endpoint",
+    )
+
+    dispatcher = ExternalAgentDispatcher(mock_settings, mock_outbox)
+    assert dispatcher.retry_pending() == 0
+    assert mock_outbox.get_stats()["dead_letter"] == 1
+    mock_post.assert_not_called()
+    mock_keyring.assert_not_called()
+
+
+@patch.dict(os.environ, {"CVN_BROKER_ENV": "staging"})
+@patch("app.config.keyring_store.get_secret")
+def test_retry_pending_applies_retention_before_transmission(
+    mock_keyring: MagicMock,
+    mock_settings: MagicMock,
+    mock_outbox: ExternalOutbox,
+) -> None:
+    local_id = mock_outbox.enqueue(
+        task_id="CVN-EXPIRED",
+        endpoint_url=(
+            "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/"
+            "cvn-submit-task"
+        ),
+        payload_json="{}",
+        payload_hash="hash",
+        idempotency_key="idem-expired",
+        nonce="nonce-expired",
+    )
+    eight_days_ago = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    with sqlite3.connect(mock_outbox.db_path) as conn:
+        conn.execute(
+            "UPDATE outbox SET created_at = ? WHERE local_id = ?",
+            (eight_days_ago, local_id),
+        )
+        conn.commit()
+
+    dispatcher = ExternalAgentDispatcher(mock_settings, mock_outbox)
+    assert dispatcher.retry_pending() == 0
+    assert mock_outbox.get_stats()["dead_letter"] == 1
+    mock_keyring.assert_not_called()

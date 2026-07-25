@@ -1,13 +1,13 @@
 # app/ui/outbox_dialog.py
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, 
-    QTableWidgetItem, QPushButton, QMessageBox, QLabel, QHeaderView
+    QTableWidgetItem, QPushButton, QMessageBox, QLabel, QHeaderView, QWidget
 )
 from PySide6.QtCore import Qt
 from app.destinations.external_outbox import ExternalOutbox
 
 class OutboxDialog(QDialog):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Local Outbox Tasks (Stuck / Dead-Letter)")
         self.resize(850, 400)
@@ -109,9 +109,14 @@ class OutboxDialog(QDialog):
             return
         
         row = selected_rows[0].row()
-        local_id_str = self.table.item(row, 0).text()
+        local_id_item = self.table.item(row, 0)
+        task_id_item = self.table.item(row, 1)
+        if local_id_item is None or task_id_item is None:
+            return
+
+        local_id_str = local_id_item.text()
         local_id = int(local_id_str)
-        task_id = self.table.item(row, 1).text()
+        task_id = task_id_item.text()
 
         confirm = QMessageBox.question(
             self,
@@ -126,7 +131,7 @@ class OutboxDialog(QDialog):
                 QMessageBox.information(self, "Success", f"Task {task_id} has been moved back to pending.")
                 self.refresh_tasks()
             else:
-                QMessageBox.warning(self, "Failed", f"Failed to retry task. Verify environment matches task destination.")
+                QMessageBox.warning(self, "Failed", "Failed to retry task. Verify environment matches task destination.")
 
     def archive_selected(self) -> None:
         selected_rows = self.table.selectionModel().selectedRows()
@@ -134,9 +139,14 @@ class OutboxDialog(QDialog):
             return
         
         row = selected_rows[0].row()
-        local_id_str = self.table.item(row, 0).text()
+        local_id_item = self.table.item(row, 0)
+        task_id_item = self.table.item(row, 1)
+        if local_id_item is None or task_id_item is None:
+            return
+
+        local_id_str = local_id_item.text()
         local_id = int(local_id_str)
-        task_id = self.table.item(row, 1).text()
+        task_id = task_id_item.text()
 
         confirm = QMessageBox.question(
             self,
