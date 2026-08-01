@@ -18,6 +18,9 @@ __pycache__/
 # Application config / logs
 settings.json
 audit.log
+run_debug.log
+crash.log
+*.log
 *.wav
 *.txt
 

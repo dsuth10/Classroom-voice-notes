@@ -3,10 +3,34 @@
 import csv
 import json
 from pathlib import Path
+import re
 from typing import Any, Dict, Optional
 
 from app.audit.audit_logger import log_audit_event
 from app.utils.paths import get_app_data_dir
+
+
+def sanitize_csv_field(val: Any) -> str:
+    """Sanitizes field value to prevent formula injection and strip ASCII control chars.
+
+    If value begins with '=', '+', '-', '@', '\t', '\r', it is prefixed with a single quote.
+    """
+    if val is None:
+        return ""
+    s = str(val)
+
+    # Strip non-printable ASCII control characters (excluding \n and \t)
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", s)
+
+    # Formula injection protection
+    if s.startswith(("=", "+", "-", "@", "\t", "\r")):
+        log_audit_event(
+            "RECORD_EXPORT_SANITIZED",
+            "record_consumer",
+            "Sanitized potential formula prefix from export field.",
+        )
+        return f"'{s}"
+    return s
 
 
 class RecordConsumer:
@@ -79,24 +103,34 @@ class RecordConsumer:
         content = payload.get("content", {})
         privacy = payload.get("privacy", {})
 
-        title = content.get("title", "")
-        category = content.get("category", "")
-        summary = content.get("summary", "")
-        tags = json.dumps(content.get("tags", []))
-        structured_fields = json.dumps(content.get("structured_fields", {}))
-        release_basis = privacy.get("release_basis", "")
-        created_at = payload.get("created_at", "")
+        title = sanitize_csv_field(content.get("title", ""))
+        category = sanitize_csv_field(content.get("category", ""))
+        summary = sanitize_csv_field(content.get("summary", ""))
+
+        tags_raw = content.get("tags", [])
+        tags_sorted = sorted(tags_raw) if isinstance(tags_raw, list) else []
+        tags_str = sanitize_csv_field(json.dumps(tags_sorted))
+
+        sf_raw = content.get("structured_fields", {})
+        sf_sorted = (
+            dict(sorted(sf_raw.items())) if isinstance(sf_raw, dict) else {}
+        )
+        sf_str = sanitize_csv_field(json.dumps(sf_sorted))
+
+        release_basis = sanitize_csv_field(privacy.get("release_basis", ""))
+        created_at = sanitize_csv_field(payload.get("created_at", ""))
+        item_id_clean = sanitize_csv_field(item_id)
 
         with open(self.export_file, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                item_id,
+                item_id_clean,
                 created_at,
                 title,
                 category,
                 summary,
-                tags,
-                structured_fields,
+                tags_str,
+                sf_str,
                 release_basis,
             ])
 

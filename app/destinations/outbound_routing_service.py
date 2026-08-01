@@ -145,13 +145,14 @@ class OutboundRoutingService:
             "external_agent.default_item_kind", "record_only"
         )
 
+        structured_fields = classification.get("structured_fields") or classification.get("category_fields") or {}
         content = {
             "title": classification.get("title", "Voice Note Capture"),
             "summary": classification.get("summary", ""),
             "transcript": transcript if include_transcript else None,
             "category": category,
             "tags": classification.get("tags", []),
-            "structured_fields": classification.get("structured_fields", {}),
+            "structured_fields": structured_fields,
         }
 
         task = safe_task if default_kind == "agent_task" else None
@@ -162,13 +163,34 @@ class OutboundRoutingService:
             "task": task,
         }
 
+        # Run v2 assessment over draft payload
+        v2_assessment = self.policy_gate.assess_v2_item(
+            item_kind=default_kind,
+            target_agent=target_agent,
+            content=content,
+            task=task,
+            vault_path=vault_path,
+            config=config,
+        )
+
+        # Merge v2 assessment risk and findings
+        risk_rank = {"high": 3, "medium": 2, "low": 1}
+        merged_risk = (
+            v2_assessment.risk_level
+            if risk_rank.get(v2_assessment.risk_level, 1) > risk_rank.get(assessment.risk_level, 1)
+            else assessment.risk_level
+        )
+        merged_findings = sorted(list(set(assessment.findings + v2_assessment.findings)))
+        merged_checks = sorted(list(set(assessment.checks_passed + v2_assessment.checks_passed)))
+        merged_redactions = sorted(list(set(assessment.suggested_redactions + v2_assessment.suggested_redactions)))
+
         assessment_dict = {
             "automatic_classification": assessment.automatic_classification,
-            "risk_level": assessment.risk_level,
-            "findings": assessment.findings,
-            "checks_passed": assessment.checks_passed,
-            "suggested_redactions": assessment.suggested_redactions,
-            "safe_auto_allowed": assessment.safe_auto_allowed,
+            "risk_level": merged_risk,
+            "findings": merged_findings,
+            "checks_passed": merged_checks,
+            "suggested_redactions": merged_redactions,
+            "safe_auto_allowed": assessment.safe_auto_allowed and v2_assessment.safe_auto_allowed,
         }
 
         if mode == "review_all":
@@ -192,7 +214,7 @@ class OutboundRoutingService:
             pause_on_high_risk = self.settings_manager.get(
                 "external_agent.trusted_pause_on_high_risk", True
             )
-            if assessment.risk_level == "high" and pause_on_high_risk:
+            if merged_risk == "high" and pause_on_high_risk:
                 self.review_store.create_review_item(
                     item_id=item_id,
                     note_path=note_path,
@@ -224,10 +246,10 @@ class OutboundRoutingService:
                 target_agent=target_agent,
                 draft_json=json.dumps(draft_dict),
                 assessment_json=json.dumps(assessment_dict),
-                status="approved",
+                status="awaiting_review",
             )
             self.review_store.approve(item_id, approval_method="trusted_mode")
-            self._update_note_frontmatter(note_path, item_id, "approved")
+            self._update_note_frontmatter(note_path, item_id, "approved_pending_enqueue")
             log_audit_event(
                 "OUTBOUND_TRUSTED_RELEASE",
                 "routing_service",

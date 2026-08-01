@@ -87,14 +87,14 @@ Full transcript inclusion should default to `false`.
 
 The developer should understand these before modifying code:
 
-- The transcription pipeline currently invokes broker dispatch only for `agent_task` captures in [worker.py](</C:/Users/dsuth/Documents/Code Projects/Classroom voice notes/app/transcription/worker.py:117>).
-- The dispatcher builds and checks a payload immediately before posting it in [external_agent_dispatcher.py](</C:/Users/dsuth/Documents/Code Projects/Classroom voice notes/app/destinations/external_agent_dispatcher.py:51>).
-- The current policy requires `agent_task` and `non_sensitive` in [policy_gate.py](</C:/Users/dsuth/Documents/Code Projects/Classroom voice notes/app/ollama_router/policy_gate.py:27>).
-- The payload builder hardcodes `privacy.classification` to `non_sensitive` and deliberately excludes the transcript in [payload_builder.py](</C:/Users/dsuth/Documents/Code Projects/Classroom voice notes/app/destinations/payload_builder.py:34>).
-- Supabase validates the same assumption in [cvn-submit-task/index.ts](</C:/Users/dsuth/Documents/Code Projects/Classroom voice notes/supabase/functions/cvn-submit-task/index.ts:55>).
-- The database has a check constraint that permits only `non_sensitive` task rows in [001_cvn_broker_mvp.sql](</C:/Users/dsuth/Documents/Code Projects/Classroom voice notes/supabase/migrations/001_cvn_broker_mvp.sql:55>).
-- The existing Obsidian Review Queue is for reclassification and local routing. It is not a suitable outbound approval mechanism; see [review_manager.py](</C:/Users/dsuth/Documents/Code Projects/Classroom voice notes/app/destinations/review_manager.py:31>).
-- The current broker worker executes OpenClaw tasks only. Its processing method rejects a Hermes target in [broker_worker.py](</C:/Users/dsuth/Documents/Code Projects/Classroom voice notes/app/worker/broker_worker.py:247>).
+- The transcription pipeline currently invokes broker dispatch only for `agent_task` captures in [worker.py](../app/transcription/worker.py#L117).
+- The dispatcher builds and checks a payload immediately before posting it in [external_agent_dispatcher.py](../app/destinations/external_agent_dispatcher.py#L51).
+- The current policy requires `agent_task` and `non_sensitive` in [policy_gate.py](../app/ollama_router/policy_gate.py#L27).
+- The payload builder hardcodes `privacy.classification` to `non_sensitive` and deliberately excludes the transcript in [payload_builder.py](../app/destinations/payload_builder.py#L34).
+- Supabase validates the same assumption in [cvn-submit-task/index.ts](../supabase/functions/cvn-submit-task/index.ts#L55).
+- The database has a check constraint that permits only `non_sensitive` task rows in [001_cvn_broker_mvp.sql](../supabase/migrations/001_cvn_broker_mvp.sql#L55).
+- The existing Obsidian Review Queue is for reclassification and local routing. It is not a suitable outbound approval mechanism; see [review_manager.py](../app/destinations/review_manager.py#L31).
+- The current broker worker executes OpenClaw tasks only. Its processing method rejects a Hermes target in [broker_worker.py](../app/worker/broker_worker.py#L247).
 
 Do not remove or weaken the existing `cvn.agent_task.v1` path. Add a versioned outbound-item path alongside it.
 

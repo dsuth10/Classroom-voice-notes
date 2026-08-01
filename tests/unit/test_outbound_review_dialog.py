@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.destinations.outbound_review_store import OutboundReviewStore
 from app.ui.outbound_review_dialog import OutboundReviewDialog
@@ -45,7 +45,7 @@ def test_dialog_loading_and_selection(
 
 
 def test_dialog_save_edits_and_approve(
-    qapp: QApplication, temp_store: OutboundReviewStore
+    qapp: QApplication, temp_store: OutboundReviewStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     temp_store.create_review_item(
         item_id="CVNI-UI-2",
@@ -56,6 +56,13 @@ def test_dialog_save_edits_and_approve(
         assessment_json=json.dumps({"risk_level": "low"}),
     )
 
+    info_messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text, *args, **kwargs: info_messages.append((title, text)),
+    )
+
     dialog = OutboundReviewDialog(temp_store)
     dialog.title_edit.setText("Updated Plant Biology")
     dialog._on_save_edits_clicked()
@@ -64,3 +71,34 @@ def test_dialog_save_edits_and_approve(
     assert updated is not None
     draft = json.loads(updated["draft_json"])
     assert draft["content"]["title"] == "Updated Plant Biology"
+    assert ("Saved", "Draft edits saved successfully.") in info_messages
+
+
+def test_dialog_approve_and_reject(
+    qapp: QApplication, temp_store: OutboundReviewStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    temp_store.create_review_item(
+        item_id="CVNI-UI-3",
+        note_path="/notes/art.md",
+        item_kind="record_only",
+        target_agent="openclaw",
+        draft_json=json.dumps({"content": {"title": "Color Theory"}}),
+        assessment_json=json.dumps({"risk_level": "low"}),
+    )
+
+    info_messages = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda parent, title, text, *args, **kwargs: info_messages.append((title, text)),
+    )
+
+    dialog = OutboundReviewDialog(temp_store)
+    dialog._on_approve_clicked()
+
+    item = temp_store.get_by_id("CVNI-UI-3")
+    assert item is not None
+    assert item["status"] == "queued"
+    assert item["approved_content_hash"] == item["content_hash"]
+
+

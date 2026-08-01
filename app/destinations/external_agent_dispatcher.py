@@ -45,13 +45,13 @@ class ExternalAgentDispatcher:
         if agent_target in ("hermes", "openclaw"):
             return agent_target
             
-        default_agent = self.settings_manager.get("external_agent.target_agent_default") or "hermes"
+        default_agent = self.settings_manager.get("external_agent.target_agent_default") or "openclaw"
         return str(default_agent)
 
     def dispatch(self, classification_data: Dict[str, Any], note_path: str, transcript: str = "") -> bool:
         """Validates external routing policy, signs the payload, enqueues, and transmits it."""
         # 1. Check if disabled globally
-        enabled = self.settings_manager.get("external_agent.enabled")
+        enabled = self.settings_manager.external_sharing_enabled()
         if not enabled:
             log_audit_event("EXTERNAL_DISPATCH_DISABLED", "dispatcher", "External agent dispatch is disabled in settings.")
             return False

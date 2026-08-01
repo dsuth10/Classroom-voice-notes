@@ -10,6 +10,18 @@ from app.audit.audit_logger import log_audit_event
 from app.utils.paths import get_app_data_dir
 
 
+ALLOWED_TRANSITIONS: Dict[str, set[str]] = {
+    "awaiting_review": {"awaiting_review", "approved_pending_enqueue", "rejected", "expired"},
+    "approved_pending_enqueue": {"queued", "enqueue_failed"},
+    "enqueue_failed": {"approved_pending_enqueue", "rejected"},
+    "queued": {"sent", "delivery_failed"},
+    "delivery_failed": {"queued", "rejected"},
+    "sent": set(),
+    "rejected": set(),
+    "expired": set(),
+}
+
+
 def compute_content_hash(
     item_kind: str,
     target_agent: Optional[str],
@@ -42,25 +54,95 @@ class OutboundReviewStore:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS review_items (
-                    review_id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    item_id             TEXT UNIQUE NOT NULL,
-                    created_at          TEXT NOT NULL,
-                    updated_at          TEXT NOT NULL,
-                    note_path           TEXT NOT NULL,
-                    item_kind           TEXT NOT NULL,
-                    target_agent        TEXT,
-                    draft_json          TEXT NOT NULL,
-                    content_hash        TEXT NOT NULL,
-                    assessment_json     TEXT NOT NULL,
-                    status              TEXT NOT NULL,
-                    approved_at         TEXT,
-                    approval_method     TEXT,
-                    rejected_at         TEXT,
-                    rejection_reason    TEXT,
-                    outbox_local_id     INTEGER
+                    review_id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_id               TEXT UNIQUE NOT NULL,
+                    created_at            TEXT NOT NULL,
+                    updated_at            TEXT NOT NULL,
+                    note_path             TEXT NOT NULL,
+                    item_kind             TEXT NOT NULL,
+                    target_agent          TEXT,
+                    draft_json            TEXT NOT NULL,
+                    content_hash          TEXT NOT NULL,
+                    approved_content_hash TEXT,
+                    assessment_json       TEXT NOT NULL,
+                    status                TEXT NOT NULL,
+                    approved_at           TEXT,
+                    approval_method       TEXT,
+                    rejected_at           TEXT,
+                    rejection_reason      TEXT,
+                    queued_at             TEXT,
+                    sent_at               TEXT,
+                    last_error            TEXT,
+                    retry_count           INTEGER DEFAULT 0,
+                    outbox_local_id       INTEGER
                 );
             """)
+            
+            # Migration helpers for existing databases
+            existing_cols = {
+                row[1] for row in conn.execute("PRAGMA table_info(review_items)").fetchall()
+            }
+            new_columns = [
+                ("approved_content_hash", "TEXT"),
+                ("queued_at", "TEXT"),
+                ("sent_at", "TEXT"),
+                ("last_error", "TEXT"),
+                ("retry_count", "INTEGER DEFAULT 0"),
+            ]
+            for col_name, col_type in new_columns:
+                if col_name not in existing_cols:
+                    try:
+                        conn.execute(f"ALTER TABLE review_items ADD COLUMN {col_name} {col_type}")
+                    except sqlite3.OperationalError:
+                        pass
             conn.commit()
+
+    def _execute_checked_transition(
+        self,
+        item_id: str,
+        expected_statuses: set[str],
+        target_status: str,
+        update_params: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        existing = self.get_by_id(item_id)
+        if not existing:
+            raise ValueError(f"Item not found: {item_id}")
+
+        current_status = existing["status"]
+        if current_status not in expected_statuses:
+            raise ValueError(
+                f"Illegal transition for item '{item_id}': current state '{current_status}' "
+                f"is not in allowed source states {sorted(list(expected_statuses))} for transition to '{target_status}'."
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        update_params["updated_at"] = now
+        update_params["status"] = target_status
+
+        set_clauses = [f"{col} = ?" for col in update_params.keys()]
+        values = list(update_params.values())
+
+        placeholders = ",".join(["?"] * len(expected_statuses))
+        where_clause = f"WHERE item_id = ? AND status IN ({placeholders})"
+        values.append(item_id)
+        values.extend(list(expected_statuses))
+
+        sql = f"UPDATE review_items SET {', '.join(set_clauses)} {where_clause}"
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(sql, values)
+            conn.commit()
+            if cursor.rowcount == 0:
+                raise ValueError(
+                    f"Transition failed for item '{item_id}': state changed concurrently from '{current_status}'."
+                )
+
+        log_audit_event(
+            "OUTBOUND_REVIEW_TRANSITION",
+            "review_store",
+            f"Item {item_id} transitioned from '{current_status}' to '{target_status}'.",
+        )
+        return self.get_by_id(item_id)
 
     def create_review_item(
         self,
@@ -144,7 +226,7 @@ class OutboundReviewStore:
         draft_dict: Dict[str, Any],
         assessment_json: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Updates draft content, recalculates content_hash, and resets any approval."""
+        """Updates draft content and columns, recalculates content_hash, and resets any approval."""
         existing = self.get_by_id(item_id)
         if not existing:
             return None
@@ -154,114 +236,118 @@ class OutboundReviewStore:
         content = draft_dict.get("content", {})
         task = draft_dict.get("task")
         new_hash = compute_content_hash(item_kind, target_agent, content, task)
-        now = datetime.now(timezone.utc).isoformat()
         draft_str = json.dumps(draft_dict)
 
-        with sqlite3.connect(self.db_path) as conn:
-            if assessment_json:
-                conn.execute(
-                    """
-                    UPDATE review_items
-                    SET draft_json = ?, content_hash = ?, assessment_json = ?,
-                        updated_at = ?, status = 'awaiting_review', approved_at = NULL, approval_method = NULL
-                    WHERE item_id = ?
-                    """,
-                    (draft_str, new_hash, assessment_json, now, item_id),
-                )
-            else:
-                conn.execute(
-                    """
-                    UPDATE review_items
-                    SET draft_json = ?, content_hash = ?, updated_at = ?,
-                        status = 'awaiting_review', approved_at = NULL, approval_method = NULL
-                    WHERE item_id = ?
-                    """,
-                    (draft_str, new_hash, now, item_id),
-                )
-            conn.commit()
+        update_params = {
+            "item_kind": item_kind,
+            "target_agent": target_agent,
+            "draft_json": draft_str,
+            "content_hash": new_hash,
+            "approved_content_hash": None,
+            "approved_at": None,
+            "approval_method": None,
+        }
+        if assessment_json is not None:
+            update_params["assessment_json"] = assessment_json
 
-        log_audit_event(
-            "OUTBOUND_REVIEW_EDITED",
-            "review_store",
-            f"Item {item_id} draft updated; approval reset.",
+        return self._execute_checked_transition(
+            item_id=item_id,
+            expected_statuses={"awaiting_review"},
+            target_status="awaiting_review",
+            update_params=update_params,
         )
-        return self.get_by_id(item_id)
 
     def approve(
         self, item_id: str, approval_method: str = "manual_ui"
     ) -> Optional[Dict[str, Any]]:
-        """Marks item approved, recording approved_at and approval_method."""
+        """Marks item approved_pending_enqueue, storing approved_content_hash and approved_at."""
+        existing = self.get_by_id(item_id)
+        if not existing:
+            return None
+
+        approved_hash = existing["content_hash"]
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                UPDATE review_items
-                SET status = 'approved', approved_at = ?, approval_method = ?, updated_at = ?
-                WHERE item_id = ?
-                """,
-                (now, approval_method, now, item_id),
-            )
-            conn.commit()
-        log_audit_event(
-            "OUTBOUND_REVIEW_APPROVED",
-            "review_store",
-            f"Item {item_id} approved via {approval_method}.",
+
+        update_params = {
+            "approved_content_hash": approved_hash,
+            "approved_at": now,
+            "approval_method": approval_method,
+        }
+
+        return self._execute_checked_transition(
+            item_id=item_id,
+            expected_statuses={"awaiting_review"},
+            target_status="approved_pending_enqueue",
+            update_params=update_params,
         )
-        return self.get_by_id(item_id)
+
+    def mark_enqueue_failed(self, item_id: str, last_error: str) -> Optional[Dict[str, Any]]:
+        """Moves item from approved_pending_enqueue to enqueue_failed with error details."""
+        update_params = {"last_error": last_error}
+        return self._execute_checked_transition(
+            item_id=item_id,
+            expected_statuses={"approved_pending_enqueue"},
+            target_status="enqueue_failed",
+            update_params=update_params,
+        )
 
     def reject(
         self, item_id: str, reason: str = ""
     ) -> Optional[Dict[str, Any]]:
+        """Rejects item from awaiting_review, enqueue_failed, or delivery_failed."""
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                UPDATE review_items
-                SET status = 'rejected', rejected_at = ?, rejection_reason = ?, updated_at = ?
-                WHERE item_id = ?
-                """,
-                (now, reason, now, item_id),
-            )
-            conn.commit()
-        log_audit_event(
-            "OUTBOUND_REVIEW_REJECTED",
-            "review_store",
-            f"Item {item_id} rejected.",
+        update_params = {
+            "rejected_at": now,
+            "rejection_reason": reason,
+        }
+        return self._execute_checked_transition(
+            item_id=item_id,
+            expected_statuses={"awaiting_review", "enqueue_failed", "delivery_failed"},
+            target_status="rejected",
+            update_params=update_params,
         )
-        return self.get_by_id(item_id)
 
     def mark_queued(
         self, item_id: str, outbox_local_id: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
+        """Marks item queued after durable outbox insertion."""
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                UPDATE review_items
-                SET status = 'queued', outbox_local_id = ?, updated_at = ?
-                WHERE item_id = ?
-                """,
-                (outbox_local_id, now, item_id),
-            )
-            conn.commit()
-        log_audit_event(
-            "OUTBOUND_QUEUED", "review_store", f"Item {item_id} queued."
+        update_params = {
+            "queued_at": now,
+            "outbox_local_id": outbox_local_id,
+        }
+        return self._execute_checked_transition(
+            item_id=item_id,
+            expected_statuses={"approved_pending_enqueue", "enqueue_failed"},
+            target_status="queued",
+            update_params=update_params,
         )
-        return self.get_by_id(item_id)
+
+    def mark_delivery_failed(self, item_id: str, last_error: str) -> Optional[Dict[str, Any]]:
+        """Marks queued item as delivery_failed with error details and incremented retry count."""
+        existing = self.get_by_id(item_id)
+        current_retries = existing.get("retry_count", 0) if existing else 0
+        update_params = {
+            "last_error": last_error,
+            "retry_count": current_retries + 1,
+        }
+        return self._execute_checked_transition(
+            item_id=item_id,
+            expected_statuses={"queued"},
+            target_status="delivery_failed",
+            update_params=update_params,
+        )
 
     def mark_sent(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """Marks item as sent once dispatch is completed."""
         now = datetime.now(timezone.utc).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE review_items SET status = 'sent', updated_at = ? WHERE"
-                " item_id = ?",
-                (now, item_id),
-            )
-            conn.commit()
-        log_audit_event(
-            "OUTBOUND_SENT", "review_store", f"Item {item_id} sent."
+        update_params = {"sent_at": now}
+        return self._execute_checked_transition(
+            item_id=item_id,
+            expected_statuses={"queued", "delivery_failed"},
+            target_status="sent",
+            update_params=update_params,
         )
-        return self.get_by_id(item_id)
 
     def expire_old(self, days: int = 30) -> int:
         cutoff = (

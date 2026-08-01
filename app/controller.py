@@ -69,7 +69,7 @@ class AppController(QObject):
         # Initialize and start the outbox retry timer (every 60 seconds)
         self.outbox_retry_timer = QTimer(self)
         self.outbox_retry_timer.timeout.connect(lambda: self._retry_pending_outbox(manual=False))
-        if self.settings_manager.get("external_agent.enabled"):
+        if self.settings_manager.external_sharing_enabled():
             self.outbox_retry_timer.start(60000)
             # Trigger one outbox check shortly after startup in background
             QTimer.singleShot(2000, lambda: self._retry_pending_outbox(manual=False))
@@ -342,7 +342,7 @@ class AppController(QObject):
         # Restart or stop the outbox retry timer depending on settings
         if hasattr(self, "outbox_retry_timer") and self.outbox_retry_timer:
             self.outbox_retry_timer.stop()
-            if self.settings_manager.get("external_agent.enabled"):
+            if self.settings_manager.external_sharing_enabled():
                 self.outbox_retry_timer.start(60000)
                 QTimer.singleShot(2000, lambda: self._retry_pending_outbox(manual=False))
 
@@ -405,7 +405,7 @@ class AppController(QObject):
 
     def _retry_pending_outbox(self, manual: bool = False) -> None:
         """Starts the background worker to retry sending pending tasks and reconcile statuses."""
-        if not self.settings_manager.get("external_agent.enabled"):
+        if not self.settings_manager.external_sharing_enabled():
             return
         
         # Prevent starting multiple workers simultaneously

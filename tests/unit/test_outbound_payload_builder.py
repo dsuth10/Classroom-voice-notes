@@ -59,7 +59,7 @@ def test_build_outbound_payload_v2_agent_task() -> None:
 
 
 def test_refresh_transport_signature_preserves_content_hash() -> None:
-    secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    secret = "test-hmac-secret-not-for-production"
     payload, json_str, _ = build_outbound_payload_v2(
         item_id="CVNI-TEST-003",
         source_device_id="device-001",

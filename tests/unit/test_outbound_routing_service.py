@@ -167,7 +167,7 @@ def test_routing_mode_trusted_auto_low_risk(
 
     item = review_store.get_by_id(result.item_id)
     assert item is not None
-    assert item["status"] == "approved"
+    assert item["status"] == "approved_pending_enqueue"
     assert item["approval_method"] == "trusted_mode"
 
 

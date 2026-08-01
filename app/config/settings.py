@@ -50,9 +50,9 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "endpoint_url": "",
         "hmac_secret_ref": "cvn_hmac_secret",
         "bearer_token_ref": "cvn_bearer_token",
-        "target_agent_default": "hermes",
+        "target_agent_default": "openclaw",
         "source_device_id": "",
-        "allowed_target_agents": ["hermes", "openclaw", "auto"],
+        "allowed_target_agents": ["openclaw", "auto"],
         "allowed_endpoint_domains": ["supabase.co"],
         "policy_gate_version": "1.0.0",
         "max_payload_bytes": 65536
@@ -142,15 +142,32 @@ class SettingsManager:
                         
                     # Migration: external_agent.sharing_mode from legacy enabled flag
                     ext_agent = data.get("external_agent")
-                    if isinstance(ext_agent, dict) and "sharing_mode" not in ext_agent:
-                        old_enabled = ext_agent.get("enabled")
-                        if old_enabled is not None:
-                            ext_agent["sharing_mode"] = "safe_auto" if old_enabled else "off"
+                    valid_modes = {"off", "safe_auto", "review_all", "trusted_auto"}
+                    if isinstance(ext_agent, dict):
+                        existing_mode = ext_agent.get("sharing_mode")
+                        if existing_mode in valid_modes:
+                            pass  # Existing valid mode wins
+                        else:
+                            old_enabled = ext_agent.get("enabled")
+                            if old_enabled is True:
+                                ext_agent["sharing_mode"] = "safe_auto"
+                            else:
+                                ext_agent["sharing_mode"] = "off"
+                        
+                        # Generate & persist stable source_device_id if missing or empty
+                        dev_id = ext_agent.get("source_device_id")
+                        if not dev_id or not isinstance(dev_id, str) or not dev_id.strip():
+                            import uuid
+                            ext_agent["source_device_id"] = f"cvn-device-{uuid.uuid4().hex[:12]}"
                         
                 # Ensure all default keys exist by doing a deep update
                 updated = copy.deepcopy(DEFAULT_SETTINGS)
                 if isinstance(data, dict):
                     updated = deep_update(updated, data)
+                # Keep derived enabled flag in sync with sharing_mode
+                if isinstance(updated.get("external_agent"), dict):
+                    mode = updated["external_agent"].get("sharing_mode", "off")
+                    updated["external_agent"]["enabled"] = (mode != "off")
                 return updated
         except Exception:
             return copy.deepcopy(DEFAULT_SETTINGS)
@@ -162,6 +179,10 @@ class SettingsManager:
         if isinstance(mode, str) and mode in valid_modes:
             return mode
         return "off"
+
+    def external_sharing_enabled(self) -> bool:
+        """Returns True if external sharing mode is active (not 'off')."""
+        return self.external_sharing_mode() != "off"
 
     def save_settings(self, new_settings: Dict[str, Any]) -> None:
         """Saves configuration to settings.json."""
@@ -214,5 +235,22 @@ class SettingsManager:
                 val[part] = {}
             val = val[part]
         val[parts[-1]] = value
+
+        # Sync legacy external_agent.enabled and external_agent.sharing_mode
+        if key == "external_agent.enabled":
+            ext = self.settings.get("external_agent", {})
+            if isinstance(ext, dict):
+                if value is True and ext.get("sharing_mode", "off") == "off":
+                    ext["sharing_mode"] = "safe_auto"
+                elif value is False:
+                    ext["sharing_mode"] = "off"
+        elif key == "external_agent.sharing_mode":
+            ext = self.settings.get("external_agent", {})
+            if isinstance(ext, dict):
+                valid_modes = {"off", "safe_auto", "review_all", "trusted_auto"}
+                mode = value if isinstance(value, str) and value in valid_modes else "off"
+                ext["sharing_mode"] = mode
+                ext["enabled"] = (mode != "off")
+
         self.save_settings(self.settings)
 

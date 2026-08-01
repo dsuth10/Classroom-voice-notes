@@ -281,6 +281,218 @@ class PolicyGate:
             safe_auto_allowed=safe_auto,
         )
 
+    def assess_v2_item(
+        self,
+        item_kind: str,
+        target_agent: str,
+        content: Dict[str, Any],
+        task: Optional[Dict[str, Any]] = None,
+        vault_path: str = "",
+        config: Optional[Dict[str, Any]] = None,
+    ) -> OutboundAssessment:
+        """Evaluates all v2 payload fields across privacy and safety policy rules."""
+        config = config or {}
+        checks_passed: List[str] = []
+        findings: List[str] = []
+        suggested_redactions: List[str] = []
+        high_risk_flags: List[str] = []
+
+        if item_kind not in ("record_only", "agent_task"):
+            findings.append("invalid_item_kind")
+            high_risk_flags.append("invalid_item_kind")
+        else:
+            checks_passed.append("valid_item_kind")
+
+        # Collect text by field for field-level attribution
+        field_texts: Dict[str, str] = {}
+        if isinstance(content, dict):
+            field_texts["content.title"] = str(content.get("title") or "")
+            field_texts["content.summary"] = str(content.get("summary") or "")
+            if content.get("transcript"):
+                field_texts["content.transcript"] = str(content.get("transcript"))
+
+            tags = content.get("tags")
+            if isinstance(tags, list):
+                field_texts["content.tags"] = " ".join([str(t) for t in tags])
+
+            s_fields = content.get("structured_fields") or content.get("category_fields") or {}
+            if isinstance(s_fields, dict):
+                field_texts["content.structured_fields"] = " ".join(
+                    [f"{k}:{v}" for k, v in s_fields.items()]
+                )
+
+        if item_kind == "agent_task" and isinstance(task, dict):
+            field_texts["task.title"] = str(task.get("title") or "")
+            field_texts["task.instructions"] = str(task.get("instructions") or "")
+
+        # 1. Student Registry scanning across all fields
+        registry_loaded = False
+        from pathlib import Path
+
+        if vault_path and Path(vault_path).exists():
+            try:
+                registry = StudentRegistry(vault_path)
+                if (
+                    hasattr(registry, "data")
+                    and isinstance(registry.data, dict)
+                    and "students" in registry.data
+                ):
+                    registry_loaded = True
+            except Exception as e:
+                log_audit_event("POLICY_BLOCKED", "policy_gate", f"Failed to load student registry: {e}")
+
+        if registry_loaded:
+            checks_passed.append("student_registry_loaded")
+            students = registry.data.get("students", {})
+            student_names = []
+            for key, entry in students.items():
+                if isinstance(entry, dict) and "display_name" in entry:
+                    student_names.append(entry["display_name"])
+                else:
+                    student_names.append(key)
+
+            name_matched = False
+            for student_name in student_names:
+                name_clean = student_name.strip()
+                if not name_clean or len(name_clean) < 2:
+                    continue
+                escaped_name = re.escape(name_clean.lower())
+                flexible = escaped_name.replace(r"\ ", r"\s+").replace(" ", r"\s+")
+                pattern = re.compile(r"(?<![A-Za-z])" + flexible + r"(?![A-Za-z])", re.IGNORECASE)
+
+                for field_name, text in field_texts.items():
+                    if pattern.search(text):
+                        name_matched = True
+                        findings.append(f"{field_name}: student_name_match ('{name_clean}')")
+                        suggested_redactions.append(f"Remove student name '{name_clean}' from {field_name}")
+
+            if name_matched:
+                high_risk_flags.append("student_name_match")
+            else:
+                checks_passed.append("no_student_registry_match")
+        else:
+            checks_passed.append("student_registry_skipped")
+
+        # 2. Contact details (email & phone)
+        email_pattern = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+        phone_pattern = re.compile(r"\b\d{8,15}\b")
+        contact_matched = False
+
+        for field_name, text in field_texts.items():
+            if email_pattern.search(text):
+                contact_matched = True
+                findings.append(f"{field_name}: email_address")
+                suggested_redactions.append(f"Redact email address from {field_name}")
+            if phone_pattern.search(text):
+                contact_matched = True
+                findings.append(f"{field_name}: phone_number")
+                suggested_redactions.append(f"Redact phone number from {field_name}")
+
+        if contact_matched:
+            high_risk_flags.append("contact_detail_found")
+        else:
+            checks_passed.append("no_contact_details")
+
+        # 3. Medical & Safeguarding / Forbidden Terms
+        forbidden_terms = [
+            "welfare", "medical", "absence", "behaviour", "behavior", "pickup", "custody",
+            "iep", "suspension", "incident", "counselling", "counseling", "psychologist",
+            "injury", "illness", "allergic", "allergy", "medication", "cps", "safety plan"
+        ]
+        forbidden_matched = False
+        for term in forbidden_terms:
+            pattern = re.compile(r"(?<![A-Za-z])" + re.escape(term) + r"(?![A-Za-z])", re.IGNORECASE)
+            for field_name, text in field_texts.items():
+                if pattern.search(text):
+                    forbidden_matched = True
+                    findings.append(f"{field_name}: forbidden_term ('{term}')")
+                    suggested_redactions.append(f"Remove sensitive term '{term}' from {field_name}")
+
+        if forbidden_matched:
+            high_risk_flags.append("forbidden_term_matched")
+        else:
+            checks_passed.append("no_forbidden_terms")
+
+        # 4. Local File Paths
+        path_patterns = [
+            r"[A-Za-z]:\\[^\s\n]+", r"[A-Za-z]:/[^\s\n]+",
+            r"/Users/[^\s\n]+", r"/home/[^\s\n]+",
+            r"\\Users\\[^\s\n]+", r"\.obsidian"
+        ]
+        path_matched = False
+        for pat_str in path_patterns:
+            pattern = re.compile(pat_str, re.IGNORECASE)
+            for field_name, text in field_texts.items():
+                if pattern.search(text):
+                    path_matched = True
+                    findings.append(f"{field_name}: local_file_path")
+                    suggested_redactions.append(f"Remove local path from {field_name}")
+
+        if path_matched:
+            high_risk_flags.append("local_path_found")
+        else:
+            checks_passed.append("no_local_file_paths")
+
+        # 5. Audio Extensions
+        audio_extensions = [r"\.wav\b", r"\.mp3\b", r"\.m4a\b", r"\.aac\b", r"\.flac\b", r"\.ogg\b"]
+        audio_matched = False
+        for ext in audio_extensions:
+            pattern = re.compile(ext, re.IGNORECASE)
+            for field_name, text in field_texts.items():
+                if pattern.search(text):
+                    audio_matched = True
+                    findings.append(f"{field_name}: audio_extension_found")
+
+        if audio_matched:
+            high_risk_flags.append("audio_extension_found")
+        else:
+            checks_passed.append("no_audio_attached")
+
+        # 6. Credentials / Secret Patterns
+        secret_patterns = [
+            r"sk-[a-zA-Z0-9_\-]{20,}",
+            r"bearer\s+[a-zA-Z0-9._\-]{20,}",
+            r"ghp_[a-zA-Z0-9]{20,}",
+        ]
+        secret_matched = False
+        for sec_pat in secret_patterns:
+            pattern = re.compile(sec_pat, re.IGNORECASE)
+            for field_name, text in field_texts.items():
+                if pattern.search(text):
+                    secret_matched = True
+                    findings.append(f"{field_name}: credential_secret_found")
+
+        if secret_matched:
+            high_risk_flags.append("credential_secret_found")
+        else:
+            checks_passed.append("no_credentials_found")
+
+        # Target agent validation
+        allowed_agents = config.get("allowed_target_agents") or ["openclaw", "auto"]
+        if target_agent not in allowed_agents:
+            findings.append(f"target_agent_unapproved: '{target_agent}'")
+        else:
+            checks_passed.append("target_agent_allowlisted")
+
+        # Determine overall risk
+        if high_risk_flags:
+            risk_level = "high"
+        elif findings:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+        safe_auto = (risk_level == "low" and not findings)
+
+        return OutboundAssessment(
+            automatic_classification="non_sensitive" if risk_level == "low" else "sensitive",
+            risk_level=risk_level,
+            findings=findings,
+            checks_passed=checks_passed,
+            suggested_redactions=suggested_redactions,
+            safe_auto_allowed=safe_auto,
+        )
+
     def is_external_dispatch_allowed(
         self,
         category: str,

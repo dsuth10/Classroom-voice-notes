@@ -27,20 +27,35 @@ class OpenClawAdapter:
         self.gateway_token = gateway_token
 
     def validate_task(self, task: Dict[str, Any]) -> None:
-        # 1. Validate envelope version
-        if task.get("schema_version") != "cvn.agent_task.v1":
-            raise UnsupportedContractVersion(f"Unsupported schema version: {task.get('schema_version')}")
+        # 1. Validate target agent
+        target = task.get("target_agent", "")
+        if target == "hermes":
+            raise UnsupportedTargetAgent("Hermes target agent is disabled until real adapter exists")
+        if target not in ("openclaw", "auto"):
+            raise UnsupportedTargetAgent(f"Unsupported target agent: {target}")
 
-        # 2. Confirm target agent is openclaw
-        if task.get("target_agent") != "openclaw":
-            raise UnsupportedTargetAgent(f"Unsupported target agent: {task.get('target_agent')}")
+        # 2. Validate envelope version
+        schema_version = task.get("schema_version")
+        if schema_version not in ("cvn.agent_task.v1", "cvn.outbound_item.v2"):
+            raise UnsupportedContractVersion(f"Unsupported schema version: {schema_version}")
 
         # 3. Check basic envelope payload fields
-        if "task" not in task or "instructions" not in task["task"]:
-            raise InvalidTaskPayload("Missing task instructions in envelope")
-
-        instructions = task["task"]["instructions"]
-        title = task["task"].get("title", "")
+        if schema_version == "cvn.outbound_item.v2":
+            if task.get("item_kind") == "record_only":
+                content = task.get("content", {})
+                instructions = content.get("summary") or content.get("title") or ""
+                title = content.get("title", "")
+            else:
+                task_obj = task.get("task") or {}
+                instructions = task_obj.get("instructions", "")
+                title = task_obj.get("title", "")
+                if not instructions:
+                    raise InvalidTaskPayload("Missing task instructions in v2 agent_task envelope")
+        else:
+            if "task" not in task or "instructions" not in task["task"]:
+                raise InvalidTaskPayload("Missing task instructions in envelope")
+            instructions = task["task"]["instructions"]
+            title = task["task"].get("title", "")
 
         # 4. Check payload limits
         if len(instructions) > 5000:
@@ -76,8 +91,16 @@ class OpenClawAdapter:
                 raise InvalidTaskPayload("cvn.test instructions must be valid JSON")
 
     def convert_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
-        instructions = task["task"]["instructions"]
-        task_id = task["task_id"]
+        task_id = task.get("item_id") or task.get("task_id") or ""
+        if task.get("schema_version") == "cvn.outbound_item.v2":
+            if task.get("item_kind") == "record_only":
+                content = task.get("content", {})
+                instructions = content.get("summary") or content.get("title") or ""
+            else:
+                task_obj = task.get("task") or {}
+                instructions = task_obj.get("instructions", "")
+        else:
+            instructions = task["task"]["instructions"]
 
         try:
             inst_data = json.loads(instructions)
@@ -93,6 +116,8 @@ class OpenClawAdapter:
         else:
             # classroom_note.summary
             payload = inst_data.get("payload", {})
+            prompt = payload.get("text") or instructions
+            max_tokens = self.config.get("maximum_output_tokens", 2000)
             prompt = payload.get("text") or instructions
             max_tokens = self.config.get("maximum_output_tokens", 2000)
 

@@ -118,7 +118,7 @@ class PipelineWorker(QThread):
             # Bypassed if the new Supabase broker is active to prevent double-sending
             if (telegram_allowed 
                 and self.settings_manager.get("agents.enabled")
-                and not self.settings_manager.get("external_agent.enabled")):
+                and not self.settings_manager.external_sharing_enabled()):
                 from app.destinations.telegram_dispatcher import TelegramDispatcher
                 dispatcher = TelegramDispatcher(self.settings_manager)
                 dispatcher.dispatch(transcript, classification, note_path)

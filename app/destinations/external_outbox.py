@@ -101,6 +101,18 @@ class ExternalOutbox:
             log_audit_event("OUTBOX_ENQUEUED", "outbox", f"Task {task_id} enqueued locally (local_id: {local_id})")
             return local_id
 
+    def get_by_task_id(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Returns outbox row by task_id if exists."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT * FROM outbox WHERE task_id = ?", (task_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        return None
+
     def get_dead_letter_tasks(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
         """Returns tasks in dead_letter status (ordered by local_id desc)."""
         with sqlite3.connect(self.db_path) as conn:

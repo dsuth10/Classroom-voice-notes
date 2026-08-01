@@ -299,32 +299,54 @@ class OutboundReviewDialog(QDialog):
         if not self.current_item_id:
             return
         draft_dict = self._get_edited_draft()
-        self.review_store.update_draft(self.current_item_id, draft_dict)
+        from app.ollama_router.policy_gate import PolicyGate
+        gate = PolicyGate()
+        assessment = gate.assess_v2_item(
+            item_kind=draft_dict["item_kind"],
+            target_agent=draft_dict["target_agent"],
+            content=draft_dict["content"],
+            task=draft_dict["task"],
+        )
+        assessment_dict = {
+            "automatic_classification": assessment.automatic_classification,
+            "risk_level": assessment.risk_level,
+            "findings": assessment.findings,
+            "checks_passed": assessment.checks_passed,
+            "suggested_redactions": assessment.suggested_redactions,
+            "safe_auto_allowed": assessment.safe_auto_allowed,
+        }
+        assessment_json = json.dumps(assessment_dict)
+        self.review_store.update_draft(self.current_item_id, draft_dict, assessment_json=assessment_json)
+        
+        # Immediately update UI state
+        self.risk_label.setText(assessment.risk_level.upper())
+        self.findings_label.setText(", ".join(assessment.findings) if assessment.findings else "None")
         QMessageBox.information(self, "Saved", "Draft edits saved successfully.")
         self.load_items()
 
     def _on_apply_redactions_clicked(self) -> None:
         if not self.current_item_id:
             return
-        item = self.items_data.get(self.current_item_id, {})
-        assessment = {}
-        try:
-            assessment = json.loads(item.get("assessment_json", "{}"))
-        except Exception:
-            pass
+        import re
 
-        redactions = assessment.get("suggested_redactions", [])
-        if not redactions:
-            QMessageBox.information(
-                self, "Redactions", "No deterministic redactions available."
-            )
-            return
+        email_pat = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+        phone_pat = re.compile(r"\b\d{8,15}\b")
+        path_pat = re.compile(r"([A-Za-z]:\\[^\s\n]+|[A-Za-z]:/[^\s\n]+|/Users/[^\s\n]+|\\Users\\[^\s\n]+)")
 
-        QMessageBox.information(
-            self,
-            "Suggested Redactions",
-            "Suggestions:\n" + "\n".join(redactions),
-        )
+        text = self.title_edit.text()
+        text = email_pat.sub("[REDACTED_EMAIL]", text)
+        text = phone_pat.sub("[REDACTED_PHONE]", text)
+        text = path_pat.sub("[REDACTED_PATH]", text)
+        self.title_edit.setText(text)
+
+        for text_edit in (self.summary_edit, self.transcript_edit, self.instructions_edit):
+            t = text_edit.toPlainText()
+            t = email_pat.sub("[REDACTED_EMAIL]", t)
+            t = phone_pat.sub("[REDACTED_PHONE]", t)
+            t = path_pat.sub("[REDACTED_PATH]", t)
+            text_edit.setText(t)
+
+        self._on_save_edits_clicked()
 
     def _on_open_note_clicked(self) -> None:
         if not self.current_item_id:
@@ -384,7 +406,16 @@ class OutboundReviewDialog(QDialog):
                 return
 
         self.review_store.approve(self.current_item_id, approval_method="manual_ui")
-        QMessageBox.information(
-            self, "Approved", f"Item '{self.current_item_id}' approved for queueing."
-        )
+
+        try:
+            from app.destinations.outbound_submission_service import OutboundSubmissionService
+            submission_service = OutboundSubmissionService(review_store=self.review_store)
+            submission_service.submit_approved_item(self.current_item_id)
+            QMessageBox.information(
+                self, "Approved & Enqueued", f"Item '{self.current_item_id}' approved and enqueued for background delivery."
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self, "Enqueue Warning", f"Item approved but outbox enqueue failed: {exc}"
+            )
         self.load_items()

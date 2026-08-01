@@ -28,13 +28,15 @@ $$;
 -- ============================================================================
 -- 2. Schedule pg_cron Reaper Job
 -- ============================================================================
-DO $$ BEGIN
+DO $block$
+BEGIN
+    PERFORM cron.unschedule('cvn-reap-outbound-items');
     PERFORM cron.schedule(
         'cvn-reap-outbound-items',
         '0 */12 * * *',
-        $$ SELECT public.cvn_reap_outbound_dead_letters(30) $$
+        $job$SELECT public.cvn_reap_outbound_dead_letters(30);$job$
     );
 EXCEPTION WHEN OTHERS THEN NULL;
-END $$;
+END $block$;
 
 COMMIT;

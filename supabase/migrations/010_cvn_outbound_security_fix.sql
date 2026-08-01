@@ -1,51 +1,28 @@
--- 008_cvn_outbound_items.sql
--- Phase 3: Outbound Items Table, pgmq queue, security-definer procedure for v2 payloads
+-- 010_cvn_outbound_security_fix.sql
+-- Forward fix for PR 3: Revoke direct RPC execution from public/anon/authenticated,
+-- enforce strict timestamp skew and schema validation, and fix cron scheduling.
 
 BEGIN;
 
--- ============================================================================
--- 1. PGMQ Queue
--- ============================================================================
-SELECT pgmq.create('q_cvn_outbound_queue');
+-- 1. Revoke public/anon/authenticated execution on cvn_submit_outbound_item
+REVOKE ALL ON FUNCTION public.cvn_submit_outbound_item(
+    TEXT, TEXT, TEXT, TEXT, JSONB, TEXT, TEXT, TEXT, TEXT, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TIMESTAMPTZ
+) FROM PUBLIC;
 
--- ============================================================================
--- 2. cvn_outbound_items — Table for v2 Outbound Items
--- ============================================================================
-CREATE TABLE IF NOT EXISTS public.cvn_outbound_items (
-    item_id                   TEXT PRIMARY KEY,
-    created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
-    source_device_id          TEXT NOT NULL,
-    item_kind                 TEXT NOT NULL CHECK (item_kind IN ('record_only', 'agent_task')),
-    target_agent              TEXT NOT NULL CHECK (target_agent IN ('hermes', 'openclaw', 'auto')),
-    status                    TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted', 'claimed', 'completed', 'failed')),
-    payload_json              JSONB NOT NULL,
-    payload_hash              TEXT NOT NULL,
-    content_hash              TEXT NOT NULL,
-    automatic_classification   TEXT NOT NULL,
-    risk_level                TEXT NOT NULL CHECK (risk_level IN ('low', 'medium', 'high')),
-    release_basis             TEXT NOT NULL CHECK (release_basis IN ('automatic_policy', 'human_approval', 'trusted_mode')),
-    approved_at               TIMESTAMPTZ,
-    policy_gate_version      TEXT NOT NULL,
-    idempotency_key           TEXT NOT NULL UNIQUE,
-    nonce                     TEXT NOT NULL,
-    signed_at                 TIMESTAMPTZ NOT NULL,
-    claimed_by                TEXT,
-    claimed_at                TIMESTAMPTZ,
-    completed_at              TIMESTAMPTZ,
-    failed_at                 TIMESTAMPTZ,
-    failure_reason            TEXT,
-    result_json               JSONB,
-    CONSTRAINT cvn_outbound_source_nonce UNIQUE (source_device_id, nonce)
-);
+REVOKE ALL ON FUNCTION public.cvn_submit_outbound_item(
+    TEXT, TEXT, TEXT, TEXT, JSONB, TEXT, TEXT, TEXT, TEXT, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TIMESTAMPTZ
+) FROM anon;
 
-CREATE INDEX IF NOT EXISTS idx_cvn_outbound_status ON public.cvn_outbound_items(status);
-CREATE INDEX IF NOT EXISTS idx_cvn_outbound_item_kind ON public.cvn_outbound_items(item_kind);
-CREATE INDEX IF NOT EXISTS idx_cvn_outbound_target_agent ON public.cvn_outbound_items(target_agent);
-CREATE INDEX IF NOT EXISTS idx_cvn_outbound_created_at ON public.cvn_outbound_items(created_at DESC);
+REVOKE ALL ON FUNCTION public.cvn_submit_outbound_item(
+    TEXT, TEXT, TEXT, TEXT, JSONB, TEXT, TEXT, TEXT, TEXT, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TIMESTAMPTZ
+) FROM authenticated;
 
--- ============================================================================
--- 3. Security Definer Stored Procedure for v2 Submission
--- ============================================================================
+-- 2. Restrict execution exclusively to service_role
+GRANT EXECUTE ON FUNCTION public.cvn_submit_outbound_item(
+    TEXT, TEXT, TEXT, TEXT, JSONB, TEXT, TEXT, TEXT, TEXT, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT, TIMESTAMPTZ
+) TO service_role;
+
+-- 3. Replace stored procedure with hardened checks and safe search_path
 CREATE OR REPLACE FUNCTION public.cvn_submit_outbound_item(
     p_item_id TEXT,
     p_source_device_id TEXT,
@@ -65,7 +42,7 @@ CREATE OR REPLACE FUNCTION public.cvn_submit_outbound_item(
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pgmq
+SET search_path = public, pgmq, pg_temp
 AS $$
 DECLARE
     v_existing_id TEXT;
@@ -153,20 +130,16 @@ BEGIN
 END;
 $$;
 
--- ============================================================================
--- 4. Enable RLS & Grants
--- ============================================================================
-ALTER TABLE public.cvn_outbound_items ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS service_role_all_cvn_outbound ON public.cvn_outbound_items;
-CREATE POLICY service_role_all_cvn_outbound ON public.cvn_outbound_items
-    FOR ALL TO service_role USING (true) WITH CHECK (true);
-
-REVOKE ALL ON FUNCTION public.cvn_submit_outbound_item FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.cvn_submit_outbound_item FROM anon;
-REVOKE ALL ON FUNCTION public.cvn_submit_outbound_item FROM authenticated;
-
-GRANT ALL ON public.cvn_outbound_items TO service_role;
-GRANT EXECUTE ON FUNCTION public.cvn_submit_outbound_item TO service_role;
+-- 4. Re-schedule pg_cron job with safe dollar quoting
+DO $block$
+BEGIN
+    PERFORM cron.unschedule('cvn-reap-outbound-items');
+    PERFORM cron.schedule(
+        'cvn-reap-outbound-items',
+        '0 */12 * * *',
+        $job$SELECT public.cvn_reap_outbound_dead_letters(30);$job$
+    );
+EXCEPTION WHEN OTHERS THEN NULL;
+END $block$;
 
 COMMIT;

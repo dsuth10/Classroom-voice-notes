@@ -68,12 +68,53 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
     errors.push("target_agent must be hermes/openclaw/auto");
   }
   if (
+    typeof p?.idempotency_key !== "string" ||
+    p.idempotency_key.trim().length < 8
+  ) {
+    errors.push("idempotency_key must be a non-empty string");
+  }
+  if (typeof p?.nonce !== "string" || p.nonce.trim().length < 8) {
+    errors.push("nonce must be a non-empty string");
+  }
+  if (
+    typeof p?.content_hash !== "string" ||
+    p.content_hash.trim().length !== 64
+  ) {
+    errors.push("content_hash must be a valid 64-char SHA-256 string");
+  }
+
+  const releaseBasis = p?.privacy?.release_basis;
+  if (
     !["automatic_policy", "human_approval", "trusted_mode"].includes(
-      p?.privacy?.release_basis,
+      releaseBasis,
     )
   ) {
     errors.push("privacy.release_basis required");
   }
+
+  if (["human_approval", "trusted_mode"].includes(releaseBasis)) {
+    const app = p?.privacy?.approval;
+    if (!app || typeof app !== "object") {
+      errors.push("privacy.approval block required for human_approval/trusted_mode");
+    } else {
+      if (!app.approved_at) {
+        errors.push("privacy.approval.approved_at required");
+      }
+      if (!app.approved_content_hash) {
+        errors.push("privacy.approval.approved_content_hash required");
+      } else if (app.approved_content_hash !== p?.content_hash) {
+        errors.push("privacy.approval.approved_content_hash must match content_hash");
+      }
+    }
+  }
+
+  if (releaseBasis === "automatic_policy") {
+    const checks = p?.privacy?.checks_passed;
+    if (!Array.isArray(checks) || checks.length === 0) {
+      errors.push("privacy.checks_passed array required for automatic_policy");
+    }
+  }
+
   if (p?.item_kind === "record_only" && p?.task != null) {
     errors.push("record_only items must have task null");
   }
