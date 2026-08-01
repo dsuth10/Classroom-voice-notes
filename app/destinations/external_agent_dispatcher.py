@@ -262,17 +262,22 @@ class ExternalAgentDispatcher:
             )
             return 0
 
+        from app.destinations.outbound_payload_builder import refresh_transport_signature
         sent_count = 0
         for task in approved_tasks:
             if should_stop and should_stop():
                 break
             local_id = task["local_id"]
             endpoint_url = task["endpoint_url"]
-            json_str = task["payload_json"]
+            
+            _, json_str, payload_hash, hmac_signature = refresh_transport_signature(
+                task["payload_json"],
+                hmac_secret
+            )
             
             headers = {
                 "Authorization": f"Bearer {bearer_token}",
-                "x-cvn-signature": sign(json_str.encode("utf-8"), hmac_secret),
+                "x-cvn-signature": hmac_signature,
                 "Content-Type": "application/json"
             }
             

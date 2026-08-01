@@ -42,6 +42,11 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     },
     "external_agent": {
         "enabled": False,
+        "sharing_mode": "off",
+        "include_full_transcript": False,
+        "default_item_kind": "record_only",
+        "trusted_pause_on_high_risk": True,
+        "review_retention_days": 30,
         "endpoint_url": "",
         "hmac_secret_ref": "cvn_hmac_secret",
         "bearer_token_ref": "cvn_bearer_token",
@@ -135,6 +140,13 @@ class SettingsManager:
                         data.pop("telegram_token", None)
                         data.pop("telegram_chat_id", None)
                         
+                    # Migration: external_agent.sharing_mode from legacy enabled flag
+                    ext_agent = data.get("external_agent")
+                    if isinstance(ext_agent, dict) and "sharing_mode" not in ext_agent:
+                        old_enabled = ext_agent.get("enabled")
+                        if old_enabled is not None:
+                            ext_agent["sharing_mode"] = "safe_auto" if old_enabled else "off"
+                        
                 # Ensure all default keys exist by doing a deep update
                 updated = copy.deepcopy(DEFAULT_SETTINGS)
                 if isinstance(data, dict):
@@ -142,6 +154,14 @@ class SettingsManager:
                 return updated
         except Exception:
             return copy.deepcopy(DEFAULT_SETTINGS)
+
+    def external_sharing_mode(self) -> str:
+        """Returns validated external sharing mode ('off', 'safe_auto', 'review_all', 'trusted_auto')."""
+        mode = self.get("external_agent.sharing_mode", "off")
+        valid_modes = {"off", "safe_auto", "review_all", "trusted_auto"}
+        if isinstance(mode, str) and mode in valid_modes:
+            return mode
+        return "off"
 
     def save_settings(self, new_settings: Dict[str, Any]) -> None:
         """Saves configuration to settings.json."""

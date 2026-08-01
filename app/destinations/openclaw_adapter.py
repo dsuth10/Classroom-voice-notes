@@ -104,7 +104,7 @@ class OpenClawAdapter:
             "max_output_tokens": max_tokens
         }
 
-    def execute(self, request: Dict[str, Any], timeout_seconds: int) -> Dict[str, Any]:
+    def execute(self, request: Dict[str, Any], timeout_seconds: int = 300) -> Dict[str, Any]:
         gateway_url = self.config.get("gateway_url", "http://127.0.0.1:18789").rstrip("/")
         responses_path = self.config.get("responses_path", "/v1/responses").lstrip("/")
         url = f"{gateway_url}/{responses_path}"

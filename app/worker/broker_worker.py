@@ -9,7 +9,6 @@ import json
 from typing import Dict, Any
 
 from app.destinations.hmac_signer import sign
-from app.destinations.openclaw_adapter import OpenClawAdapter
 from app.worker.errors import (
     UnsupportedContractVersion,
     UnsupportedTaskType,
@@ -245,12 +244,15 @@ class BrokerWorker:
             return False
 
     def process_claimed_task(self, task_id: str, target_agent: str, payload: Dict[str, Any]) -> None:
-        # 1. Verify routing
-        if target_agent != "openclaw":
-            print(f"[-] CRITICAL PROTOCOL ERROR: Worker claimed a non-matching task target '{target_agent}'. Leaving unclaimed.")
+        # 1. Verify routing via AdapterRegistry
+        from app.worker.task_adapter import get_default_registry
+        registry = get_default_registry(self.config.get("openclaw", {}), self.gateway_token)
+        try:
+            adapter = registry.get_adapter(target_agent)
+        except Exception as e:
+            print(f"[-] Permanent target agent failure on task {task_id}: {e}")
+            self.fail_task(task_id, str(e), "UNSUPPORTED_TARGET_AGENT", "permanent")
             return
-
-        adapter = OpenClawAdapter(self.config.get("openclaw", {}), self.gateway_token)
 
         # 2. Validate task envelope & type
         try:

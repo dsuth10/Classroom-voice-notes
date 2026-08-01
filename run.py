@@ -65,11 +65,15 @@ def main() -> None:
     app.setQuitOnLastWindowClosed(False)
 
     indicator.show()
+    indicator.raise_()
+    indicator.activateWindow()
     print("Indicator shown OK", flush=True)
 
     # 5. Open the Settings Main Window GUI, passing the controller
     window = MainWindow(settings_manager, controller)
     window.show()
+    window.raise_()
+    window.activateWindow()
     print("MainWindow shown OK", flush=True)
 
     # Double-clicking the indicator re-opens the settings window
