@@ -10,7 +10,7 @@ Validates the full v2 pipeline:
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 import pytest
 
 from app.destinations.canonical_json import compute_canonical_content_hash
@@ -21,8 +21,9 @@ from app.ollama_router.policy_gate import PolicyGate
 from scripts.outbound_worker_v2 import OutboundWorkerV2
 
 
-def test_full_v2_outbound_lifecycle_integration(tmp_path: Path) -> None:
+def test_full_v2_outbound_lifecycle_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Verifies complete v2 lifecycle from capture draft to worker completion."""
+    monkeypatch.setenv("CVN_BROKER_ENV", "staging")
     store = OutboundReviewStore(tmp_path / "e2e_review.db")
     item_id = "CVNI-20260802-140000-E2E1"
 
@@ -41,7 +42,11 @@ def test_full_v2_outbound_lifecycle_integration(tmp_path: Path) -> None:
         task=draft_dict["task"],
     )
 
-    assessment_json = json.dumps({"risk_level": assessment.risk_level, "findings": assessment.findings})
+    assessment_json = json.dumps({
+        "automatic_classification": assessment.automatic_classification,
+        "risk_level": assessment.risk_level,
+        "findings": assessment.findings,
+    })
     store.create_review_item(
         item_id=item_id,
         note_path=str(tmp_path / "note.md"),
@@ -72,36 +77,39 @@ def test_full_v2_outbound_lifecycle_integration(tmp_path: Path) -> None:
 
     # 4. OutboundWorkerV2 Claim & Completion
     worker = OutboundWorkerV2(
-        supabase_url="https://synthetic.supabase.co",
-        supabase_key="synthetic-key",
+        edge_base_url="https://synthetic.supabase.co/functions/v1",
+        worker_bearer_token="synthetic-worker-token",
         worker_id="worker-e2e-1",
     )
 
-    mock_client = MagicMock()
-    mock_rpc = MagicMock()
-
-    claim_res = MagicMock()
-    claim_res.data = {
+    mock_resp_claim = MagicMock()
+    mock_resp_claim.read.return_value = json.dumps({
         "claimed": True,
         "item_id": item_id,
         "item_kind": "record_only",
         "target_agent": "openclaw",
         "lease_token": "CVNL-E2E-LEASE-TOKEN-99",
+        "payload_hash": "a" * 64,
+        "content_hash": "b" * 64,
         "payload_json": draft_dict,
-    }
-    complete_res = MagicMock()
-    complete_res.data = {"success": True, "item_id": item_id, "status": "completed"}
+    }).encode("utf-8")
+    mock_resp_claim.__enter__.return_value = mock_resp_claim
 
-    mock_rpc.execute.side_effect = [claim_res, complete_res]
-    mock_client.rpc.return_value = mock_rpc
-    worker._client = mock_client
+    mock_resp_complete = MagicMock()
+    mock_resp_complete.read.return_value = json.dumps({
+        "success": True,
+        "item_id": item_id,
+        "status": "completed",
+    }).encode("utf-8")
+    mock_resp_complete.__enter__.return_value = mock_resp_complete
 
-    claimed_payload = worker.claim_item()
-    assert claimed_payload is not None
-    assert claimed_payload["lease_token"] == "CVNL-E2E-LEASE-TOKEN-99"
+    with patch("urllib.request.urlopen", side_effect=[mock_resp_claim, mock_resp_complete]):
+        claimed_payload = worker.claim_item()
+        assert claimed_payload is not None
+        assert claimed_payload["lease_token"] == "CVNL-E2E-LEASE-TOKEN-99"
 
-    success = worker.process_item(claimed_payload)
-    assert success is True
+        success = worker.process_item(claimed_payload)
+        assert success is True
 
     # 5. Reconcile remote completed status
     status_rpc = MagicMock()

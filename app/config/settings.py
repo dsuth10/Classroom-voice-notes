@@ -51,7 +51,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "hmac_secret_ref": "cvn_hmac_secret",
         "bearer_token_ref": "cvn_bearer_token",
         "target_agent_default": "openclaw",
-        "source_device_id": "cvn-device-default",
+        "source_device_id": "",
         "allowed_target_agents": ["openclaw"],
         "allowed_endpoint_domains": ["supabase.co"],
         "policy_gate_version": "1.0.0",
@@ -129,7 +129,8 @@ class SettingsManager:
             data["external_agent"] = ext_agent
 
         dev_id = ext_agent.get("source_device_id")
-        if not dev_id or not isinstance(dev_id, str) or not dev_id.strip():
+        legacy_defaults = {"cvn-device-default", "cvn-device-local-default", "cvn-device"}
+        if not dev_id or not isinstance(dev_id, str) or not dev_id.strip() or dev_id in legacy_defaults:
             ext_agent["source_device_id"] = f"cvn-device-{uuid.uuid4().hex[:12]}"
 
         save_ok = self._atomic_save_json(self.config_path, data)

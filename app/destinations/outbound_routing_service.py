@@ -276,8 +276,11 @@ class OutboundRoutingService:
             self._update_note_frontmatter(note_path, item_id, "approved_pending_enqueue")
 
 
-            if not self.settings_manager.get("external_agent.source_device_id"):
-                self.settings_manager.set("external_agent.source_device_id", "cvn-device-local-default")
+            dev_id = self.settings_manager.get("external_agent.source_device_id")
+            if not dev_id or dev_id in {"cvn-device-default", "cvn-device-local-default", "cvn-device"}:
+                import uuid
+                dev_id = f"cvn-device-{uuid.uuid4().hex[:12]}"
+                self.settings_manager.set("external_agent.source_device_id", dev_id)
 
             # Enqueue via submission service — only report trusted_auto_queued when durable row exists
             try:

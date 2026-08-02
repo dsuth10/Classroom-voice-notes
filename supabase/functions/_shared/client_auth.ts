@@ -91,8 +91,14 @@ export async function authenticateClient(
       throw new ClientAuthenticationError("Invalid bearer token");
     }
 
-    const expectedSig = await hmacSha256Hex(bodyText, clientConfig.hmac_secret);
-    if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
+    const url = new URL(req.url);
+    const canonicalSigText = `${req.method.toUpperCase()}|${url.pathname}|${bodyText}`;
+    const expectedSigFull = await hmacSha256Hex(canonicalSigText, clientConfig.hmac_secret);
+    const expectedSigBody = await hmacSha256Hex(bodyText, clientConfig.hmac_secret);
+    if (
+      !timingSafeEqual(signature.toLowerCase(), expectedSigFull.toLowerCase()) &&
+      !timingSafeEqual(signature.toLowerCase(), expectedSigBody.toLowerCase())
+    ) {
       throw new ClientAuthenticationError("Invalid signature");
     }
 
@@ -118,8 +124,14 @@ export async function authenticateClient(
     throw new ClientAuthenticationError("Invalid bearer token");
   }
 
-  const expectedSig = await hmacSha256Hex(bodyText, envHmac);
-  if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
+  const url = new URL(req.url);
+  const canonicalSigText = `${req.method.toUpperCase()}|${url.pathname}|${bodyText}`;
+  const expectedSigFull = await hmacSha256Hex(canonicalSigText, envHmac);
+  const expectedSigBody = await hmacSha256Hex(bodyText, envHmac);
+  if (
+    !timingSafeEqual(signature.toLowerCase(), expectedSigFull.toLowerCase()) &&
+    !timingSafeEqual(signature.toLowerCase(), expectedSigBody.toLowerCase())
+  ) {
     throw new ClientAuthenticationError("Invalid signature");
   }
 

@@ -13,7 +13,8 @@ from app.destinations.outbound_submission_service import OutboundSubmissionServi
 from app.destinations.record_consumer import RecordConsumer
 
 
-def test_full_outbound_sharing_e2e_flow(tmp_path: Path) -> None:
+def test_full_outbound_sharing_e2e_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CVN_BROKER_ENV", "staging")
     # 1. Setup isolated stores and settings
     config_dir = tmp_path / "config"
     config_dir.mkdir()

@@ -50,6 +50,22 @@ def test_migration_017_immutability_and_worker_scoping() -> None:
     assert "REVOKE ALL ON public.cvn_outbound_items FROM PUBLIC, anon, authenticated" in content
 
 
+def test_migration_018_single_lease_contract_and_immutability() -> None:
+    migration_file = Path("supabase/migrations/018_cvn_outbound_remediation_v2.sql")
+    assert migration_file.exists(), f"Migration missing at {migration_file}"
+    content = migration_file.read_text(encoding="utf-8")
+
+    assert "cvn-lease-" in content
+    assert "missing_lease_token" in content
+    assert "invalid_lease_token" in content
+    assert "lease_expired" in content
+    assert "check_outbound_payload_hash_hex" in content
+    assert "check_outbound_content_hash_hex" in content
+    assert "DROP FUNCTION IF EXISTS public.cvn_claim_outbound_item" in content
+    assert "DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item" in content
+    assert "DROP FUNCTION IF EXISTS public.cvn_fail_outbound_item" in content
+
+
 def test_all_migrations_exist_and_are_sequential() -> None:
     migrations_dir = Path("supabase/migrations")
     sql_files = sorted(migrations_dir.glob("*.sql"))
@@ -68,6 +84,7 @@ def test_all_migrations_exist_and_are_sequential() -> None:
         "010_cvn_outbound_security_fix.sql",
         "016_cvn_trusted_device_entitlements_v2.sql",
         "017_cvn_outbound_broker_immutability.sql",
+        "018_cvn_outbound_remediation_v2.sql",
     ]
 
     for name in expected:

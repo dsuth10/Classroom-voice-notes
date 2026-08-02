@@ -148,10 +148,13 @@ class OutboundSubmissionService:
                     endpoint_url = submission_endpoint(schema_version, base_url=base_url)
                 else:
                     endpoint_url = submission_endpoint(schema_version)
-            except Exception:
-                # Synthetic endpoint for local dev / unconfigured test environment
-                endpoint_url = "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-submit-outbound-item"
-
+            except Exception as ep_err:
+                log_audit_event(
+                    "OUTBOUND_ENDPOINT_RESOLUTION_FAILED",
+                    "submission_service",
+                    f"Endpoint resolution failed for schema {schema_version}: {ep_err}",
+                )
+                raise ValueError(f"ERR_ENDPOINT_RESOLUTION_FAILED: Failed to resolve endpoint for schema '{schema_version}': {ep_err}")
 
             # 7. Check existing outbox row for exact identity match vs conflict
             existing_outbox = self.outbox.get_by_task_id(item_id)
@@ -167,6 +170,14 @@ class OutboundSubmissionService:
                     mismatches.append("content_hash")
                 if existing_outbox.get("release_basis") != release_basis:
                     mismatches.append("release_basis")
+                if existing_outbox.get("endpoint_url") != endpoint_url:
+                    mismatches.append("endpoint_url")
+                if existing_outbox.get("payload_hash") != payload_hash:
+                    mismatches.append("payload_hash")
+                if existing_outbox.get("idempotency_key") != payload.get("idempotency_key"):
+                    mismatches.append("idempotency_key")
+                if existing_outbox.get("nonce") != payload.get("nonce"):
+                    mismatches.append("nonce")
 
                 if mismatches:
                     conflict_msg = f"ERR_OUTBOX_CONFLICT: Existing outbox entry for '{item_id}' has conflicting fields: {', '.join(mismatches)}"

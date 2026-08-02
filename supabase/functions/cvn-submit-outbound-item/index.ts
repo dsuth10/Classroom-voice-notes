@@ -162,6 +162,20 @@ serve(async (req: Request) => {
     );
   }
 
+  // 3.5 Device identity binding verification
+  if (clientIdentity.source_device_id && clientIdentity.source_device_id !== payload.source_device_id) {
+    return new Response(
+      JSON.stringify({
+        error: "device_identity_mismatch",
+        message: "Payload source_device_id does not match authenticated credential device identity",
+      }),
+      {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+
   // 4. Recompute canonical content hash server-side and verify match
   const serverCanonicalHash = await computeCanonicalHash(
     payload.item_kind,
@@ -217,6 +231,20 @@ serve(async (req: Request) => {
 
   // 7. Server-Authorized Trusted Mode Capability Evaluation
   if (payload.privacy?.release_basis === "trusted_mode") {
+    const checks = payload.privacy?.checks_passed;
+    if (!Array.isArray(checks) || checks.length === 0) {
+      return new Response(
+        JSON.stringify({
+          error: "invalid_trusted_mode_checks",
+          message: "privacy.checks_passed array required for trusted_mode",
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
     // DERIVE client_key_id FROM AUTHENTICATED SERVER IDENTITY — ignore/override caller spoofing
     const serverClientKeyId = clientIdentity.key_id;
     const environment = clientIdentity.environment;
