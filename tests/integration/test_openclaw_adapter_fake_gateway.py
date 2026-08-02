@@ -64,7 +64,7 @@ class TestOpenClawAdapterFakeGateway(unittest.TestCase):
             "gateway_url": f"http://127.0.0.1:{self.port}",
             "responses_path": "/v1/responses",
             "agent_id": "cvn-broker",
-            "connect_timeout_seconds": 2.0
+            "connect_timeout_seconds": 10.0,  # Must be longer than read timeout to avoid race
         }
         self.adapter = OpenClawAdapter(self.config, "fake-token")
 

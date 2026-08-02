@@ -66,7 +66,7 @@ class OutboundRoutingService:
         category = classification.get("category", "general_note")
         sensitivity = classification.get("sensitivity", "non_sensitive")
         target_agent = self.settings_manager.get(
-            "external_agent.target_agent_default", "hermes"
+            "external_agent.target_agent_default", "openclaw"
         )
         endpoint_url = self.settings_manager.get(
             "external_agent.endpoint_url", ""
@@ -120,9 +120,19 @@ class OutboundRoutingService:
                 )
 
                 dispatcher = ExternalAgentDispatcher(self.settings_manager)
-                dispatcher.dispatch(classification, note_path, transcript)
+                dispatched = dispatcher.dispatch(classification, note_path, transcript)
+                if dispatched:
+                    return OutboundRoutingResult(
+                        action="safe_auto_dispatched",
+                        assessment=assessment,
+                    )
+                log_audit_event(
+                    "OUTBOUND_ROUTING_DISPATCH_FAILED",
+                    "routing_service",
+                    "Mode 'safe_auto': dispatcher returned failure; saving locally.",
+                )
                 return OutboundRoutingResult(
-                    action="safe_auto_dispatched",
+                    action="saved_locally_only",
                     assessment=assessment,
                 )
             log_audit_event(
@@ -250,16 +260,36 @@ class OutboundRoutingService:
             )
             self.review_store.approve(item_id, approval_method="trusted_mode")
             self._update_note_frontmatter(note_path, item_id, "approved_pending_enqueue")
-            log_audit_event(
-                "OUTBOUND_TRUSTED_RELEASE",
-                "routing_service",
-                f"Item {item_id} released via trusted_mode.",
-            )
-            return OutboundRoutingResult(
-                action="trusted_auto_queued",
-                item_id=item_id,
-                assessment=assessment,
-            )
+
+            # Enqueue via submission service — only report trusted_auto_queued when durable row exists
+            try:
+                from app.destinations.outbound_submission_service import OutboundSubmissionService
+                submission_svc = OutboundSubmissionService(
+                    settings_manager=self.settings_manager,
+                    review_store=self.review_store,
+                )
+                submission_svc.submit_approved_item(item_id)
+                log_audit_event(
+                    "OUTBOUND_TRUSTED_RELEASE",
+                    "routing_service",
+                    f"Item {item_id} released via trusted_mode and enqueued.",
+                )
+                return OutboundRoutingResult(
+                    action="trusted_auto_queued",
+                    item_id=item_id,
+                    assessment=assessment,
+                )
+            except Exception as enqueue_exc:
+                log_audit_event(
+                    "OUTBOUND_TRUSTED_ENQUEUE_FAILED",
+                    "routing_service",
+                    f"Item {item_id} trusted_mode approved but enqueue failed: {enqueue_exc}.",
+                )
+                return OutboundRoutingResult(
+                    action="added_to_review_queue",
+                    item_id=item_id,
+                    assessment=assessment,
+                )
 
         return OutboundRoutingResult(action="saved_locally_only")
 

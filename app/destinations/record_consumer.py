@@ -2,6 +2,7 @@
 
 import csv
 import json
+import sqlite3
 from pathlib import Path
 import re
 from typing import Any, Dict, Optional
@@ -13,13 +14,13 @@ from app.utils.paths import get_app_data_dir
 def sanitize_csv_field(val: Any) -> str:
     """Sanitizes field value to prevent formula injection and strip ASCII control chars.
 
-    If value begins with '=', '+', '-', '@', '\t', '\r', it is prefixed with a single quote.
+    If value begins with '=', '+', '-', '@', '\\t', '\\r', it is prefixed with a single quote.
     """
     if val is None:
         return ""
     s = str(val)
 
-    # Strip non-printable ASCII control characters (excluding \n and \t)
+    # Strip non-printable ASCII control characters (excluding \\n and \\t)
     s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", s)
 
     # Formula injection protection
@@ -38,6 +39,11 @@ class RecordConsumer:
 
     Populates structured records into export storage idempotently without
     executing agent instructions.
+
+    Idempotency is guaranteed by a SQLite sidecar index. The SQLite INSERT uses
+    INSERT OR IGNORE with a UNIQUE item_id constraint, so concurrent writers
+    cannot produce duplicate rows. A crash between index insert and CSV append
+    leaves an orphaned index row; on re-delivery the row is skipped as duplicate.
     """
 
     def __init__(self, export_file: Optional[Path] = None) -> None:
@@ -45,7 +51,9 @@ class RecordConsumer:
             self.export_file = get_app_data_dir() / "outbound_records.csv"
         else:
             self.export_file = export_file
+        self._index_file = self.export_file.with_suffix(".db")
         self._init_export_file()
+        self._init_index()
 
     def _init_export_file(self) -> None:
         self.export_file.parent.mkdir(parents=True, exist_ok=True)
@@ -63,16 +71,35 @@ class RecordConsumer:
                     "release_basis",
                 ])
 
+    def _init_index(self) -> None:
+        """Create the SQLite sidecar index for idempotency checking."""
+        with sqlite3.connect(self._index_file) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS exported_items (
+                    item_id TEXT PRIMARY KEY,
+                    exported_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+                """
+            )
+            conn.commit()
+
     def is_already_processed(self, item_id: str) -> bool:
-        if not self.export_file.exists():
-            return False
-        with open(self.export_file, "r", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            next(reader, None)  # Skip header
-            for row in reader:
-                if row and row[0] == item_id:
-                    return True
-        return False
+        """Returns True if item_id is in the SQLite index (idempotency guard)."""
+        with sqlite3.connect(self._index_file) as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM exported_items WHERE item_id = ? LIMIT 1", (item_id,)
+            )
+            return cursor.fetchone() is not None
+
+    def _mark_indexed(self, item_id: str) -> bool:
+        """Atomically inserts item_id into the index. Returns False if already present."""
+        with sqlite3.connect(self._index_file) as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO exported_items (item_id) VALUES (?)", (item_id,)
+            )
+            conn.commit()
+            return cursor.rowcount == 1
 
     def process_record(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         item_id = payload.get("item_id", "")
@@ -88,11 +115,12 @@ class RecordConsumer:
                 "record_only payload cannot contain task instructions"
             )
 
-        if self.is_already_processed(item_id):
+        # Atomic idempotency check via SQLite INSERT OR IGNORE
+        if not self._mark_indexed(item_id):
             log_audit_event(
                 "RECORD_CONSUMER_DUPLICATE",
                 "record_consumer",
-                f"Item {item_id} already exported.",
+                f"Item {item_id} already exported (index duplicate).",
             )
             return {
                 "status": "duplicate_skipped",

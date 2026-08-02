@@ -1,10 +1,9 @@
-"""Outbound Submission Service - Enqueues approved review items to the local outbox."""
-
 import json
 import sqlite3
 from typing import Any, Dict, Optional
 
 from app.audit.audit_logger import log_audit_event
+from app.config.environment import submission_endpoint, UnsupportedContractVersion
 from app.config.settings import SettingsManager
 from app.destinations.external_outbox import ExternalOutbox
 from app.destinations.outbound_payload_builder import (
@@ -66,12 +65,25 @@ class OutboundSubmissionService:
             source_device_id = self.settings_manager.get(
                 "external_agent.source_device_id", "local_device"
             )
-            endpoint_url = self.settings_manager.get(
-                "external_agent.endpoint_url", "https://api.supabase.co"
-            )
-            hmac_secret = self.settings_manager.get("external_agent.hmac_secret", "")
 
-            # 3. Build v2 payload structure
+            # PR6: resolve HMAC secret from keyring (same as dispatcher.retry_pending)
+            hmac_secret: str = ""
+            try:
+                from app.config.environment import get_env_credential_ref
+                from app.config import keyring_store
+                hmac_ref = get_env_credential_ref("hmac_secret")
+                hmac_secret = keyring_store.get_secret(hmac_ref) or ""
+            except Exception:
+                # Broker env not configured (development/CI) — proceed unsigned, dispatcher will re-sign
+                pass
+
+            # Derive release_basis from approval method recorded in review store
+            approval_method = item.get("approval_method") or "manual_ui"
+            if approval_method == "trusted_mode":
+                release_basis_value = "trusted_mode"
+            else:
+                release_basis_value = "human_approval"
+
             payload, payload_str, payload_hash = build_outbound_payload_v2(
                 item_id=item_id,
                 source_device_id=source_device_id,
@@ -83,11 +95,11 @@ class OutboundSubmissionService:
                 ),
                 risk_level=assessment_dict.get("risk_level", "low"),
                 findings=assessment_dict.get("findings", []),
-                release_basis="human_approval",
+                release_basis=release_basis_value,
                 approval_metadata={
                     "approved_at": item.get("approved_at"),
                     "approved_content_hash": approved_content_hash,
-                    "reviewer_type": "local_user",
+                    "reviewer_type": approval_method,
                 },
                 task=task,
             )
@@ -97,7 +109,18 @@ class OutboundSubmissionService:
                     payload, hmac_secret
                 )
 
-            # 4. Enqueue to durable local Outbox (or reuse existing entry if reconciling)
+            # 4. Resolve schema-aware endpoint URL (v1 -> cvn-submit-task, v2 -> cvn-submit-outbound-item)
+            schema_version = "cvn.outbound_item.v2"
+            release_basis = item.get("release_basis") or release_basis_value
+            try:
+                endpoint_url = submission_endpoint(schema_version)
+            except (UnsupportedContractVersion, RuntimeError):
+                # Fall back to settings endpoint if broker env not configured (development)
+                endpoint_url = self.settings_manager.get(
+                    "external_agent.endpoint_url", ""
+                )
+
+            # 5. Enqueue to durable local Outbox (or reuse existing entry if reconciling)
             existing_outbox = self.outbox.get_by_task_id(item_id)
             if existing_outbox:
                 local_id = int(existing_outbox["local_id"])
@@ -111,6 +134,11 @@ class OutboundSubmissionService:
                     nonce=payload["nonce"],
                     note_path=item.get("note_path"),
                     target_agent=target_agent,
+                    schema_version=schema_version,
+                    item_kind=item_kind,
+                    content_hash=approved_content_hash,
+                    release_basis=release_basis,
+                    review_id=str(item.get("review_id", "")),
                 )
 
             # 5. Atomically transition review store status to 'queued'

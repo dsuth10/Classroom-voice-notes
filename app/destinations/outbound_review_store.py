@@ -36,7 +36,7 @@ def compute_content_hash(
         "task": task or {},
     }
     canonical_bytes = json.dumps(
-        canonical_obj, sort_keys=True, separators=(",", ":")
+        canonical_obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")
     return hashlib.sha256(canonical_bytes).hexdigest()
 
@@ -88,6 +88,7 @@ class OutboundReviewStore:
                 ("sent_at", "TEXT"),
                 ("last_error", "TEXT"),
                 ("retry_count", "INTEGER DEFAULT 0"),
+                ("release_basis", "TEXT"),
             ]
             for col_name, col_type in new_columns:
                 if col_name not in existing_cols:
@@ -282,11 +283,15 @@ class OutboundReviewStore:
         )
 
     def mark_enqueue_failed(self, item_id: str, last_error: str) -> Optional[Dict[str, Any]]:
-        """Moves item from approved_pending_enqueue to enqueue_failed with error details."""
+        """Moves item to enqueue_failed with error details.
+
+        Allowed from both 'approved_pending_enqueue' and 'enqueue_failed' (re-attempt failure)
+        to prevent an illegal self-transition error masking the original error.
+        """
         update_params = {"last_error": last_error}
         return self._execute_checked_transition(
             item_id=item_id,
-            expected_statuses={"approved_pending_enqueue"},
+            expected_statuses={"approved_pending_enqueue", "enqueue_failed"},
             target_status="enqueue_failed",
             update_params=update_params,
         )
@@ -339,12 +344,29 @@ class OutboundReviewStore:
         )
 
     def mark_sent(self, item_id: str) -> Optional[Dict[str, Any]]:
-        """Marks item as sent once dispatch is completed."""
+        """Marks item as sent once dispatch is completed. Idempotent if already sent."""
+        existing = self.get_by_id(item_id)
+        if existing and existing.get("status") == "sent":
+            return existing
         now = datetime.now(timezone.utc).isoformat()
         update_params = {"sent_at": now}
         return self._execute_checked_transition(
             item_id=item_id,
             expected_statuses={"queued", "delivery_failed"},
+            target_status="sent",
+            update_params=update_params,
+        )
+
+    def mark_completed(self, item_id: str) -> Optional[Dict[str, Any]]:
+        """Marks item as completed once consumer confirms successful processing. Idempotent if already sent."""
+        existing = self.get_by_id(item_id)
+        if existing and existing.get("status") == "sent":
+            return existing
+        now = datetime.now(timezone.utc).isoformat()
+        update_params = {"sent_at": now}
+        return self._execute_checked_transition(
+            item_id=item_id,
+            expected_statuses={"queued", "sent", "delivery_failed"},
             target_status="sent",
             update_params=update_params,
         )

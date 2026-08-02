@@ -7,15 +7,57 @@ BROKER_PROJECT_REFS = {
     "production": "slvzyasosjiteimonzen",
 }
 
+SUPPORTED_SCHEMAS = {
+    "cvn.agent_task.v1": "cvn-submit-task",
+    "cvn.outbound_item.v2": "cvn-submit-outbound-item",
+}
+
+
+class UnsupportedContractVersion(ValueError):
+    """Raised when a schema version has no registered endpoint mapping."""
+
+
 def get_broker_env() -> str:
     """Returns the validated broker environment, or raises RuntimeError if invalid/missing.
-    
+
     Accepts only 'staging' or 'production'.
     """
     env = os.getenv("CVN_BROKER_ENV", "")
     if env not in ("staging", "production"):
         raise RuntimeError(f"CVN_BROKER_ENV must be exactly 'staging' or 'production'. Got: '{env}'")
     return env
+
+
+def get_broker_base_url() -> str:
+    """Returns the HTTPS base URL for the active broker environment's Supabase project."""
+    env = get_broker_env()
+    ref = BROKER_PROJECT_REFS[env]
+    return f"https://{ref}.supabase.co/functions/v1"
+
+
+def submission_endpoint(schema_version: str, base_url: str | None = None) -> str:
+    """Returns the full HTTPS endpoint URL for the given schema version.
+
+    Args:
+        schema_version: One of the supported contract schema identifiers.
+        base_url: Optional override base URL (must still pass validation). Defaults
+                  to the environment-derived Supabase functions base URL.
+
+    Raises:
+        UnsupportedContractVersion: If schema_version is not a known contract.
+        RuntimeError: If the resolved endpoint fails host/scheme validation.
+    """
+    if schema_version not in SUPPORTED_SCHEMAS:
+        raise UnsupportedContractVersion(
+            f"Schema version '{schema_version}' has no registered endpoint. "
+            f"Supported: {sorted(SUPPORTED_SCHEMAS)}"
+        )
+    function_name = SUPPORTED_SCHEMAS[schema_version]
+    resolved_base = base_url if base_url else get_broker_base_url()
+    endpoint = f"{resolved_base.rstrip('/')}/{function_name}"
+    validate_broker_endpoint(endpoint)
+    return endpoint
+
 
 def validate_broker_endpoint(endpoint_url: str) -> None:
     """Require an HTTPS Supabase function URL for the active broker environment."""
@@ -42,9 +84,10 @@ def validate_broker_endpoint(endpoint_url: str) -> None:
             f"Broker endpoint must target the approved {env} Supabase functions host"
         )
 
+
 def get_env_credential_ref(base_ref: str) -> str:
     """Produces explicit, predictable environment-specific secret names for keyring store lookup.
-    
+
     Accepts:
         'key_id', 'bearer_token', 'hmac_secret'
     Returns:
@@ -59,3 +102,4 @@ def get_env_credential_ref(base_ref: str) -> str:
         return f"cvn_broker_hmac_secret_{env}"
     else:
         raise RuntimeError(f"Unknown credential base reference: {base_ref}")
+

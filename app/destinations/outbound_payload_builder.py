@@ -72,7 +72,7 @@ def build_outbound_payload_v2(
     }
 
     deterministic_json = json.dumps(
-        payload, sort_keys=True, separators=(",", ":")
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
     payload_hash = hashlib.sha256(
         deterministic_json.encode("utf-8")
@@ -101,7 +101,7 @@ def refresh_transport_signature(
     refreshed["nonce"] = str(uuid.uuid4())
 
     deterministic_json = json.dumps(
-        refreshed, sort_keys=True, separators=(",", ":")
+        refreshed, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     )
     payload_hash = hashlib.sha256(
         deterministic_json.encode("utf-8")

@@ -52,7 +52,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "bearer_token_ref": "cvn_bearer_token",
         "target_agent_default": "openclaw",
         "source_device_id": "",
-        "allowed_target_agents": ["openclaw", "auto"],
+        "allowed_target_agents": ["openclaw"],
         "allowed_endpoint_domains": ["supabase.co"],
         "policy_gate_version": "1.0.0",
         "max_payload_bytes": 65536

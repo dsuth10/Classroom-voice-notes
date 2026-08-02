@@ -42,15 +42,12 @@ class OpenClawAdapter:
         # 3. Check basic envelope payload fields
         if schema_version == "cvn.outbound_item.v2":
             if task.get("item_kind") == "record_only":
-                content = task.get("content", {})
-                instructions = content.get("summary") or content.get("title") or ""
-                title = content.get("title", "")
-            else:
-                task_obj = task.get("task") or {}
-                instructions = task_obj.get("instructions", "")
-                title = task_obj.get("title", "")
-                if not instructions:
-                    raise InvalidTaskPayload("Missing task instructions in v2 agent_task envelope")
+                raise InvalidTaskPayload("OpenClaw adapter cannot accept record_only payloads")
+            task_obj = task.get("task") or {}
+            instructions = task_obj.get("instructions", "")
+            title = task_obj.get("title", "")
+            if not instructions:
+                raise InvalidTaskPayload("Missing task instructions in v2 agent_task envelope")
         else:
             if "task" not in task or "instructions" not in task["task"]:
                 raise InvalidTaskPayload("Missing task instructions in envelope")
@@ -92,13 +89,14 @@ class OpenClawAdapter:
 
     def convert_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
         task_id = task.get("item_id") or task.get("task_id") or ""
+        if not task_id:
+            raise InvalidTaskPayload("Task missing non-empty item_id/task_id")
+
         if task.get("schema_version") == "cvn.outbound_item.v2":
             if task.get("item_kind") == "record_only":
-                content = task.get("content", {})
-                instructions = content.get("summary") or content.get("title") or ""
-            else:
-                task_obj = task.get("task") or {}
-                instructions = task_obj.get("instructions", "")
+                raise InvalidTaskPayload("OpenClaw adapter cannot convert record_only payloads")
+            task_obj = task.get("task") or {}
+            instructions = task_obj.get("instructions", "")
         else:
             instructions = task["task"]["instructions"]
 
@@ -116,8 +114,6 @@ class OpenClawAdapter:
         else:
             # classroom_note.summary
             payload = inst_data.get("payload", {})
-            prompt = payload.get("text") or instructions
-            max_tokens = self.config.get("maximum_output_tokens", 2000)
             prompt = payload.get("text") or instructions
             max_tokens = self.config.get("maximum_output_tokens", 2000)
 

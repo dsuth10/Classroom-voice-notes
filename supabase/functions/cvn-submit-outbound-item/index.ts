@@ -1,6 +1,7 @@
 // supabase/functions/cvn-submit-outbound-item/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { computeCanonicalHash, isValidHexSha256 } from "../_shared/outbound_contract.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,6 +11,7 @@ const corsHeaders = {
 
 const SCHEMA_VERSION = "cvn.outbound_item.v2";
 const STALE_TIMESTAMP_SECONDS = 300; // 5 min
+const MAX_BODY_SIZE_BYTES = 512 * 1024; // 512 KB
 
 const HMAC_SECRET = Deno.env.get("CVN_HMAC_SECRET") ?? "";
 const BEARER_TOKEN = Deno.env.get("CVN_BEARER_TOKEN") ?? "";
@@ -64,8 +66,8 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
   if (!["record_only", "agent_task"].includes(p?.item_kind)) {
     errors.push("item_kind must be record_only or agent_task");
   }
-  if (!["hermes", "openclaw", "auto"].includes(p?.target_agent)) {
-    errors.push("target_agent must be hermes/openclaw/auto");
+  if (!["openclaw"].includes(p?.target_agent)) {
+    errors.push("target_agent must be openclaw");
   }
   if (
     typeof p?.idempotency_key !== "string" ||
@@ -76,11 +78,8 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
   if (typeof p?.nonce !== "string" || p.nonce.trim().length < 8) {
     errors.push("nonce must be a non-empty string");
   }
-  if (
-    typeof p?.content_hash !== "string" ||
-    p.content_hash.trim().length !== 64
-  ) {
-    errors.push("content_hash must be a valid 64-char SHA-256 string");
+  if (!isValidHexSha256(p?.content_hash)) {
+    errors.push("content_hash must be a valid lowercase 64-char SHA-256 string");
   }
 
   const releaseBasis = p?.privacy?.release_basis;
@@ -100,8 +99,8 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
       if (!app.approved_at) {
         errors.push("privacy.approval.approved_at required");
       }
-      if (!app.approved_content_hash) {
-        errors.push("privacy.approval.approved_content_hash required");
+      if (!isValidHexSha256(app.approved_content_hash)) {
+        errors.push("privacy.approval.approved_content_hash must be a valid lowercase 64-char hex SHA-256 string");
       } else if (app.approved_content_hash !== p?.content_hash) {
         errors.push("privacy.approval.approved_content_hash must match content_hash");
       }
@@ -115,8 +114,8 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
     }
   }
 
-  if (p?.item_kind === "record_only" && p?.task != null) {
-    errors.push("record_only items must have task null");
+  if (p?.item_kind === "record_only" && p?.task != null && Object.keys(p.task).length > 0) {
+    errors.push("record_only items must have task empty or null");
   }
   if (
     p?.item_kind === "agent_task" &&
@@ -149,8 +148,17 @@ serve(async (req: Request) => {
     });
   }
 
-  // 2. Read body & HMAC check
+  // 2. Read body & check max size limit
   const bodyText = await req.text();
+  const bodyBytes = new TextEncoder().encode(bodyText).length;
+  if (bodyBytes > MAX_BODY_SIZE_BYTES) {
+    return new Response(JSON.stringify({ error: "body_too_large" }), {
+      status: 413,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // 3. HMAC signature check
   const signatureHeader = req.headers.get("x-cvn-signature") ?? "";
   const computedSignature = await hmacSha256Hex(bodyText, HMAC_SECRET);
 
@@ -161,7 +169,7 @@ serve(async (req: Request) => {
     });
   }
 
-  // 3. Parse JSON & Validate Schema
+  // 4. Parse JSON & Validate Schema
   let payload: any;
   try {
     payload = JSON.parse(bodyText);
@@ -183,7 +191,44 @@ serve(async (req: Request) => {
     );
   }
 
-  // 4. Stale timestamp check
+  // 5. Recompute canonical content hash server-side and verify match
+  const serverCanonicalHash = await computeCanonicalHash(
+    payload.item_kind,
+    payload.target_agent,
+    payload.content,
+    payload.task
+  );
+
+  if (serverCanonicalHash !== payload.content_hash) {
+    return new Response(
+      JSON.stringify({
+        error: "content_hash_mismatch",
+        message: "Server-derived canonical content hash does not match payload content_hash",
+      }),
+      {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  if (["human_approval", "trusted_mode"].includes(payload.privacy?.release_basis)) {
+    const approvedHash = payload.privacy?.approval?.approved_content_hash;
+    if (approvedHash !== serverCanonicalHash) {
+      return new Response(
+        JSON.stringify({
+          error: "approved_content_hash_mismatch",
+          message: "Server-derived canonical content hash does not match approved_content_hash",
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+  }
+
+  // 6. Stale timestamp check
   const signedAtMs = Date.parse(payload.signed_at);
   const nowMs = Date.now();
   if (
@@ -196,7 +241,7 @@ serve(async (req: Request) => {
     });
   }
 
-  // 5. Invoke Supabase RPC
+  // 7. Invoke Supabase RPC
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const payloadHash = await sha256Hex(bodyText);
 

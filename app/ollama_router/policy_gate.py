@@ -467,10 +467,12 @@ class PolicyGate:
         else:
             checks_passed.append("no_credentials_found")
 
-        # Target agent validation
-        allowed_agents = config.get("allowed_target_agents") or ["openclaw", "auto"]
+        # Target agent validation — hermes is not a registered v2 adapter
+        # Only 'openclaw' is supported until a real Hermes adapter is implemented.
+        allowed_agents = config.get("allowed_target_agents") or ["openclaw"]
         if target_agent not in allowed_agents:
             findings.append(f"target_agent_unapproved: '{target_agent}'")
+            high_risk_flags.append("target_agent_unapproved")
         else:
             checks_passed.append("target_agent_allowlisted")
 

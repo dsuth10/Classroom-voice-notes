@@ -131,7 +131,10 @@ def test_main_window_trusted_mode_cancellation(qapp: QApplication, temp_settings
     assert window.sharing_mode_combo.currentData() == "off"
 
 
-def test_main_window_save_sharing_mode(qapp: QApplication, temp_settings: SettingsManager) -> None:
+def test_main_window_save_sharing_mode(
+    qapp: QApplication, temp_settings: SettingsManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
     window = MainWindow(temp_settings)
     review_idx = window.sharing_mode_combo.findData("review_all")
     window.sharing_mode_combo.setCurrentIndex(review_idx)

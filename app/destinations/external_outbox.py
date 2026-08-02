@@ -57,6 +57,36 @@ class ExternalOutbox:
                 conn.commit()
             except sqlite3.OperationalError:
                 pass
+            # Migration PR3: add schema_version column
+            try:
+                conn.execute("ALTER TABLE outbox ADD COLUMN schema_version TEXT NOT NULL DEFAULT 'cvn.agent_task.v1'")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            # Migration PR3: add item_kind column
+            try:
+                conn.execute("ALTER TABLE outbox ADD COLUMN item_kind TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            # Migration PR3: add content_hash column
+            try:
+                conn.execute("ALTER TABLE outbox ADD COLUMN content_hash TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            # Migration PR3: add release_basis column
+            try:
+                conn.execute("ALTER TABLE outbox ADD COLUMN release_basis TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            # Migration PR3: add review_id column
+            try:
+                conn.execute("ALTER TABLE outbox ADD COLUMN review_id TEXT")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
 
     def enqueue(
@@ -68,7 +98,12 @@ class ExternalOutbox:
         idempotency_key: str,
         nonce: str,
         note_path: Optional[str] = None,
-        target_agent: Optional[str] = None
+        target_agent: Optional[str] = None,
+        schema_version: str = "cvn.outbound_item.v2",
+        item_kind: Optional[str] = None,
+        content_hash: Optional[str] = None,
+        release_basis: Optional[str] = None,
+        review_id: Optional[str] = None,
     ) -> int:
         """Enqueues a new pending task in the local outbox."""
         now_str = datetime.now(timezone.utc).isoformat()
@@ -77,10 +112,11 @@ class ExternalOutbox:
             cursor.execute(
                 """
                 INSERT INTO outbox (
-                    task_id, created_at, endpoint_url, payload_json, payload_hash, 
+                    task_id, created_at, endpoint_url, payload_json, payload_hash,
                     status, attempt_count, next_retry_at, idempotency_key, nonce,
-                    note_path, target_agent
-                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?)
+                    note_path, target_agent, schema_version, item_kind,
+                    content_hash, release_basis, review_id
+                ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_id,
@@ -93,6 +129,11 @@ class ExternalOutbox:
                     nonce,
                     note_path,
                     target_agent,
+                    schema_version,
+                    item_kind,
+                    content_hash,
+                    release_basis,
+                    review_id,
                 )
             )
             conn.commit()
