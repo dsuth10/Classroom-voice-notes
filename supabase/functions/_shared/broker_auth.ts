@@ -154,16 +154,23 @@ export async function authenticateWorker(
   }
 
   // Strict Fail-Closed Validation of Permission Arrays
-  const allowedKinds = keyConfig.allowed_kinds || ["record_only", "agent_task"];
+  if (
+    !Array.isArray(keyConfig.allowed_kinds) ||
+    keyConfig.allowed_kinds.length === 0
+  ) {
+    throw new AuthenticationError(
+      "Invalid key configuration: allowed_kinds is required and must be non-empty array",
+    );
+  }
+  const allowedKinds = keyConfig.allowed_kinds;
+
   if (
     typeof keyConfig.bearer_token !== "string" ||
     typeof keyConfig.hmac_secret !== "string" ||
     !Array.isArray(keyConfig.allowed_targets) ||
     keyConfig.allowed_targets.length === 0 ||
     !Array.isArray(keyConfig.allowed_worker_ids) ||
-    keyConfig.allowed_worker_ids.length === 0 ||
-    !Array.isArray(allowedKinds) ||
-    allowedKinds.length === 0
+    keyConfig.allowed_worker_ids.length === 0
   ) {
     throw new AuthenticationError(
       "Invalid key configuration or empty permission list",

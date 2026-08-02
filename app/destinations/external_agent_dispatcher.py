@@ -1,5 +1,6 @@
 import httpx
 import json
+import os
 import platform
 import re
 from pathlib import Path
@@ -138,10 +139,7 @@ class ExternalAgentDispatcher:
             checks_passed=checks_passed
         )
 
-        # 7. HMAC Sign
-        hmac_signature = sign(json_str.encode("utf-8"), hmac_secret)
-
-        # 8. Enqueue locally in pending state
+        # 7. Enqueue locally in pending state
         local_id = self.outbox.enqueue(
             task_id=payload["task_id"],
             endpoint_url=endpoint_url,
@@ -154,13 +152,18 @@ class ExternalAgentDispatcher:
             target_agent=target_agent,
         )
 
-
-        # 9. Perform HTTP POST request
-        headers = {
-            "Authorization": f"Bearer {bearer_token}",
-            "x-cvn-signature": hmac_signature,
-            "Content-Type": "application/json"
-        }
+        # 8. Generate 5-element HMAC request headers
+        from app.destinations.hmac_signer import create_client_request_headers
+        client_key_id = self.settings_manager.get("external_agent.client_key_id") or os.environ.get("CVN_CLIENT_KEY_ID", "default_client_key")
+        headers = create_client_request_headers(
+            method="POST",
+            endpoint_url=endpoint_url,
+            raw_body_str=json_str,
+            bearer_token=bearer_token,
+            hmac_secret=hmac_secret,
+            client_key_id=client_key_id,
+            nonce=payload.get("nonce"),
+        )
 
         self.outbox.mark_sending(local_id)
         
@@ -277,11 +280,17 @@ class ExternalAgentDispatcher:
                 hmac_secret
             )
             
-            headers = {
-                "Authorization": f"Bearer {bearer_token}",
-                "x-cvn-signature": hmac_signature,
-                "Content-Type": "application/json"
-            }
+            from app.destinations.hmac_signer import create_client_request_headers
+            client_key_id = self.settings_manager.get("external_agent.client_key_id") or os.environ.get("CVN_CLIENT_KEY_ID", "default_client_key")
+            headers = create_client_request_headers(
+                method="POST",
+                endpoint_url=endpoint_url,
+                raw_body_str=json_str,
+                bearer_token=bearer_token,
+                hmac_secret=hmac_secret,
+                client_key_id=client_key_id,
+                nonce=task.get("nonce"),
+            )
             
             self.outbox.mark_sending(local_id)
             try:

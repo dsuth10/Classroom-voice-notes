@@ -84,28 +84,35 @@ export async function authenticateClient(
     );
   }
   if (!signature) {
-    throw new ClientAuthenticationError("Missing signature");
+    throw new ClientAuthenticationError("Missing signature header");
+  }
+  if (!keyIdHeader) {
+    throw new ClientAuthenticationError("Missing client key ID header");
+  }
+  if (!timestampStr) {
+    throw new ClientAuthenticationError("Missing timestamp header");
+  }
+  if (!nonce) {
+    throw new ClientAuthenticationError("Missing nonce header");
   }
 
   const providedBearer = authHeader.slice(7);
 
-  // 1. Timestamp Freshness and Nonce Replay Check (if headers present, or required)
+  // 1. Timestamp Freshness and Nonce Replay Check
   const nowSeconds = Math.floor(Date.now() / 1000);
-  if (timestampStr) {
-    const reqTimestamp = parseInt(timestampStr, 10);
-    if (
-      isNaN(reqTimestamp) ||
-      Math.abs(nowSeconds - reqTimestamp) > MAX_TIMESTAMP_AGE_SECONDS
-    ) {
-      throw new ClientAuthenticationError("Stale or invalid request timestamp");
-    }
+  const reqTimestamp = parseInt(timestampStr, 10);
+  if (
+    isNaN(reqTimestamp) ||
+    Math.abs(nowSeconds - reqTimestamp) > MAX_TIMESTAMP_AGE_SECONDS
+  ) {
+    throw new ClientAuthenticationError("Stale or invalid request timestamp");
   }
-  if (nonce) {
-    pruneClientNonces(nowSeconds);
-    const nonceKey = `${keyIdHeader}:${nonce}`;
-    if (seenClientNonces.has(nonceKey)) {
-      throw new ClientAuthenticationError("Nonce already used");
-    }
+
+  const resolvedKeyId = keyIdHeader;
+  pruneClientNonces(nowSeconds);
+  const nonceKey = `${resolvedKeyId}:${nonce}`;
+  if (seenClientNonces.has(nonceKey)) {
+    throw new ClientAuthenticationError("Nonce already used");
   }
 
   // 2. Registry-based Multi-Client Identity Path
@@ -130,9 +137,7 @@ export async function authenticateClient(
       );
     }
 
-    const targetKeyId =
-      keyIdHeader || Deno.env.get("CVN_CLIENT_KEY_ID") || "default_client_key";
-    const clientConfig = registry.clients[targetKeyId];
+    const clientConfig = registry.clients[resolvedKeyId];
     if (!clientConfig || clientConfig.enabled !== true) {
       throw new ClientAuthenticationError(
         "Client identity not found or disabled",
@@ -146,10 +151,7 @@ export async function authenticateClient(
     }
 
     const url = new URL(req.url);
-    const canonicalSigText =
-      timestampStr && nonce
-        ? `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`
-        : `${req.method.toUpperCase()}|${url.pathname}|${bodyText}`;
+    const canonicalSigText = `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
 
     const expectedSig = await hmacSha256Hex(
       canonicalSigText,
@@ -159,12 +161,10 @@ export async function authenticateClient(
       throw new ClientAuthenticationError("Invalid signature");
     }
 
-    if (nonce) {
-      seenClientNonces.set(`${targetKeyId}:${nonce}`, nowSeconds);
-    }
+    seenClientNonces.set(nonceKey, nowSeconds);
 
     return {
-      key_id: targetKeyId,
+      key_id: resolvedKeyId,
       source_device_id: clientConfig.source_device_id,
       environment: Deno.env.get("CVN_ENVIRONMENT") || "staging",
     };
@@ -173,7 +173,6 @@ export async function authenticateClient(
   // 3. Single-Client Environment Credential Fallback Path
   const envBearer = Deno.env.get("CVN_BEARER_TOKEN") ?? "";
   const envHmac = Deno.env.get("CVN_HMAC_SECRET") ?? "";
-  const serverKeyId = Deno.env.get("CVN_CLIENT_KEY_ID") || "default_client_key";
 
   if (!envBearer || !envHmac) {
     throw new ClientAuthenticationError(
@@ -188,22 +187,17 @@ export async function authenticateClient(
   }
 
   const url = new URL(req.url);
-  const canonicalSigText =
-    timestampStr && nonce
-      ? `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`
-      : `${req.method.toUpperCase()}|${url.pathname}|${bodyText}`;
+  const canonicalSigText = `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
 
   const expectedSig = await hmacSha256Hex(canonicalSigText, envHmac);
   if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
     throw new ClientAuthenticationError("Invalid signature");
   }
 
-  if (nonce) {
-    seenClientNonces.set(`${serverKeyId}:${nonce}`, nowSeconds);
-  }
+  seenClientNonces.set(nonceKey, nowSeconds);
 
   return {
-    key_id: serverKeyId,
+    key_id: resolvedKeyId,
     environment: Deno.env.get("CVN_ENVIRONMENT") || "staging",
   };
 }
