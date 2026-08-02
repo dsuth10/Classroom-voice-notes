@@ -17,7 +17,8 @@ function createMockSupabaseClient(seenSet: Set<string> = new Set()) {
   return {
     rpc: (name: string, args: any) => {
       if (name === "cvn_register_request_nonce") {
-        const key = `${args.p_credential_type}:${args.p_key_id}:${args.p_nonce}`;
+        const key =
+          `${args.p_credential_type}:${args.p_key_id}:${args.p_nonce}`;
         const nowSeconds = Math.floor(Date.now() / 1000);
         if (
           Math.abs(nowSeconds - args.p_timestamp) > args.p_ttl_seconds ||

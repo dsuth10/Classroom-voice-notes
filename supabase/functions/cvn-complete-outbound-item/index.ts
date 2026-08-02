@@ -16,8 +16,9 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 serve(async (req: Request) => {
-  if (req.method === "OPTIONS")
+  if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
+  }
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
       status: 405,
@@ -34,10 +35,9 @@ serve(async (req: Request) => {
     return new Response(
       JSON.stringify({
         error: "unauthorized",
-        message:
-          authErr instanceof AuthenticationError
-            ? authErr.message
-            : "Worker authentication failed",
+        message: authErr instanceof AuthenticationError
+          ? authErr.message
+          : "Worker authentication failed",
       }),
       {
         status: 401,
@@ -67,7 +67,8 @@ serve(async (req: Request) => {
       return new Response(
         JSON.stringify({
           error: "worker_identity_unauthorized",
-          message: `Worker key is not authorized for worker_id '${requestedWorkerId}'`,
+          message:
+            `Worker key is not authorized for worker_id '${requestedWorkerId}'`,
         }),
         {
           status: 403,

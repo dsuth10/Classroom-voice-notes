@@ -185,7 +185,8 @@ export async function authenticateWorker(
 
   // 4. 5-Element Canonical HMAC Signature Verification: METHOD|PATH|TIMESTAMP|NONCE|BODY
   const url = new URL(req.url);
-  const canonicalString = `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${rawBodyOrCanonicalString}`;
+  const canonicalString =
+    `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${rawBodyOrCanonicalString}`;
   const expectedSig = await hmacSha256Hex(
     canonicalString,
     keyConfig.hmac_secret,
@@ -198,8 +199,8 @@ export async function authenticateWorker(
   // 5. Mandatory Atomic Database Nonce Replay Protection Registration
   const sbUrl = Deno.env.get("SUPABASE_URL");
   const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const client =
-    supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
+  const client = supabaseClient ||
+    (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
 
   if (!client) {
     throw new AuthenticationError(

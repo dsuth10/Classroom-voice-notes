@@ -100,8 +100,9 @@ serve(async (req: Request) => {
       headers: corsHeaders,
     });
   }
-  const vtSeconds =
-    typeof payload?.vt_seconds === "number" ? payload.vt_seconds : 1800; // 30 mins default
+  const vtSeconds = typeof payload?.vt_seconds === "number"
+    ? payload.vt_seconds
+    : 1800; // 30 mins default
   const targetAgent = payload?.target_agent ?? "hermes";
   if (!["hermes", "openclaw"].includes(targetAgent)) {
     return new Response("Invalid target_agent", {

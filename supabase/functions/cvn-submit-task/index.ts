@@ -268,8 +268,8 @@ serve(async (req: Request) => {
     JSON.stringify({
       accepted: true,
       task_id: row?.task_id ?? payload.task_id,
-      status_url:
-        row?.status_url ?? `/functions/v1/cvn-status/${payload.task_id}`,
+      status_url: row?.status_url ??
+        `/functions/v1/cvn-status/${payload.task_id}`,
       msg_id: row?.msg_id,
     }),
     {

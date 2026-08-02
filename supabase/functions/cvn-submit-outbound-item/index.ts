@@ -154,10 +154,9 @@ serve(async (req: Request) => {
     return new Response(
       JSON.stringify({
         error: "unauthorized",
-        message:
-          authErr instanceof ClientAuthenticationError
-            ? authErr.message
-            : "Client authentication failed",
+        message: authErr instanceof ClientAuthenticationError
+          ? authErr.message
+          : "Client authentication failed",
       }),
       {
         status: 401,
@@ -299,8 +298,8 @@ serve(async (req: Request) => {
         JSON.stringify({
           error: "trusted_mode_unauthorized",
           reason_code: entResult?.reason_code ?? "entitlement_check_failed",
-          message:
-            entResult?.error_message ?? "Trusted mode entitlement check failed",
+          message: entResult?.error_message ??
+            "Trusted mode entitlement check failed",
         }),
         {
           status: 403,
@@ -321,8 +320,8 @@ serve(async (req: Request) => {
     p_payload_json: payload,
     p_payload_hash: payloadHash,
     p_content_hash: payload.content_hash,
-    p_automatic_classification:
-      payload.privacy?.automatic_classification ?? "non_sensitive",
+    p_automatic_classification: payload.privacy?.automatic_classification ??
+      "non_sensitive",
     p_risk_level: payload.privacy?.risk_level ?? "low",
     p_release_basis: payload.privacy?.release_basis,
     p_approved_at: payload.privacy?.approval?.approved_at ?? null,

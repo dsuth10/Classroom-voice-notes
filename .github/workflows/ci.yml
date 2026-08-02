@@ -55,11 +55,11 @@ jobs:
       - name: Check TypeScript formatting
         run: deno fmt --check supabase/functions/
 
-      - name: Type-check TypeScript contract
-        run: deno check supabase/functions/_shared/outbound_contract.ts supabase/functions/_shared/outbound_contract_test.ts
+      - name: Type-check TypeScript contract and Edge Functions
+        run: deno check supabase/functions/_shared/*.ts supabase/functions/cvn-claim-outbound-item/index.ts supabase/functions/cvn-claim-task/index.ts supabase/functions/cvn-complete-outbound-item/index.ts supabase/functions/cvn-complete-task/index.ts supabase/functions/cvn-fail-outbound-item/index.ts supabase/functions/cvn-fail-task/index.ts supabase/functions/cvn-outbound-status/index.ts supabase/functions/cvn-status/index.ts supabase/functions/cvn-submit-outbound-item/index.ts supabase/functions/cvn-submit-task/index.ts
 
       - name: Run TypeScript canonical contract tests
-        run: deno test supabase/functions/_shared/outbound_contract_test.ts
+        run: deno test --allow-env supabase/functions/_shared/outbound_contract_test.ts
 
       - name: Run unit and safe integration tests
         run: uv run --frozen pytest tests -p no:cacheprovider

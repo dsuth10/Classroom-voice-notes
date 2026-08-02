@@ -4,8 +4,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   authenticateWorker,
   AuthenticationError,
-  sha256Hex,
   hmacSha256Hex,
+  sha256Hex,
   timingSafeEqual,
 } from "../_shared/broker_auth.ts";
 
@@ -85,7 +85,8 @@ serve(async (req: Request) => {
     });
   }
 
-  const canonicalString = `GET\n/functions/v1/cvn-status/${taskId}\ntask_id=${taskId}\nsigned_at=${signedAt}\nnonce=${nonce}`;
+  const canonicalString =
+    `GET\n/functions/v1/cvn-status/${taskId}\ntask_id=${taskId}\nsigned_at=${signedAt}\nnonce=${nonce}`;
 
   // 4. Authenticate Client vs Worker
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);

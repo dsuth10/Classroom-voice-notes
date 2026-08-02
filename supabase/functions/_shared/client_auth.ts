@@ -63,8 +63,7 @@ export async function authenticateClient(
 ): Promise<AuthenticatedClient> {
   const authHeader = req.headers.get("authorization") ?? "";
   const signature = req.headers.get("x-cvn-signature") ?? "";
-  const keyIdHeader =
-    req.headers.get("x-cvn-client-key-id") ??
+  const keyIdHeader = req.headers.get("x-cvn-client-key-id") ??
     req.headers.get("x-cvn-key-id") ??
     "";
   const timestampStr = req.headers.get("x-cvn-timestamp") ?? "";
@@ -138,7 +137,8 @@ export async function authenticateClient(
     }
 
     const url = new URL(req.url);
-    const canonicalSigText = `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
+    const canonicalSigText =
+      `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
 
     const expectedSig = await hmacSha256Hex(
       canonicalSigText,
@@ -151,8 +151,8 @@ export async function authenticateClient(
     // 3. Mandatory Atomic Database Nonce Replay Protection Registration
     const sbUrl = Deno.env.get("SUPABASE_URL");
     const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    const client =
-      supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
+    const client = supabaseClient ||
+      (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
 
     if (!client) {
       throw new ClientAuthenticationError(
@@ -200,7 +200,8 @@ export async function authenticateClient(
   }
 
   const url = new URL(req.url);
-  const canonicalSigText = `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
+  const canonicalSigText =
+    `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
 
   const expectedSig = await hmacSha256Hex(canonicalSigText, envHmac);
   if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
@@ -210,8 +211,8 @@ export async function authenticateClient(
   // Mandatory Atomic Database Nonce Replay Protection Registration
   const sbUrl = Deno.env.get("SUPABASE_URL");
   const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  const client =
-    supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
+  const client = supabaseClient ||
+    (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
 
   if (!client) {
     throw new ClientAuthenticationError(
