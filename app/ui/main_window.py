@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QScrollArea,
 )
+from PySide6.QtCore import QTimer
 from app.config.settings import SettingsManager
 
 class MainWindow(QMainWindow):
@@ -305,24 +306,60 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(agent_group)
 
         # ----------------------------------------------------
-        # Group 4.5: External Agent Dispatch (Supabase Broker)
+        # Group 4.5: External Outbound Sharing Configuration
         # ----------------------------------------------------
-        broker_group = QGroupBox("External Agent Dispatch (Supabase Broker)")
+        broker_group = QGroupBox("External Outbound Sharing Configuration")
         broker_layout = QVBoxLayout(broker_group)
         broker_layout.setSpacing(8)
-        
-        # Enabled checkbox
-        self.broker_enabled_chk = QCheckBox("Enable Supabase broker dispatching")
-        self.broker_enabled_chk.setChecked(self.settings_manager.get("external_agent.enabled"))
-        broker_layout.addWidget(self.broker_enabled_chk)
-        
+
+        # Sharing Mode Combo
+        mode_layout = QHBoxLayout()
+        broker_layout.addLayout(mode_layout)
+        mode_layout.addWidget(QLabel("Sharing Mode:"))
+        self.sharing_mode_combo = QComboBox()
+        self.sharing_mode_combo.addItem("Keep everything on this device (Off)", "off")
+        self.sharing_mode_combo.addItem("Automatically send safe items (Safe Auto)", "safe_auto")
+        self.sharing_mode_combo.addItem("Review every item before sending (Review All)", "review_all")
+        self.sharing_mode_combo.addItem("Automatically send, pause on high risk (Trusted Auto)", "trusted_auto")
+
+        current_mode = self.settings_manager.external_sharing_mode()
+        self._set_sharing_mode_combo(current_mode)
+        self._previous_mode_idx = self.sharing_mode_combo.currentIndex()
+        self.sharing_mode_combo.currentIndexChanged.connect(self._on_sharing_mode_changed)
+        mode_layout.addWidget(self.sharing_mode_combo)
+
+        # Transcript Inclusion Checkbox
+        self.include_transcript_chk = QCheckBox("Include full transcript in outbound payloads")
+        self.include_transcript_chk.setChecked(bool(self.settings_manager.get("external_agent.include_full_transcript", False)))
+        broker_layout.addWidget(self.include_transcript_chk)
+
+        # Default Item Kind & Target Agent
+        kind_layout = QHBoxLayout()
+        broker_layout.addLayout(kind_layout)
+        kind_layout.addWidget(QLabel("Default Item Kind:"))
+        self.default_kind_combo = QComboBox()
+        self.default_kind_combo.addItems(["record_only", "agent_task"])
+        self.default_kind_combo.setCurrentText(self.settings_manager.get("external_agent.default_item_kind", "record_only"))
+        kind_layout.addWidget(self.default_kind_combo)
+
+        kind_layout.addWidget(QLabel("Default Target Agent:"))
+        self.target_agent_combo = QComboBox()
+        self.target_agent_combo.addItems(["openclaw"])
+        self.target_agent_combo.setCurrentText(self.settings_manager.get("external_agent.target_agent_default", "openclaw"))
+        kind_layout.addWidget(self.target_agent_combo)
+
+        # High-risk pause checkbox
+        self.pause_high_risk_chk = QCheckBox("Pause trusted mode on high-risk findings")
+        self.pause_high_risk_chk.setChecked(bool(self.settings_manager.get("external_agent.trusted_pause_on_high_risk", True)))
+        broker_layout.addWidget(self.pause_high_risk_chk)
+
         # Endpoint URL
         endpoint_layout = QHBoxLayout()
         broker_layout.addLayout(endpoint_layout)
         endpoint_layout.addWidget(QLabel("Endpoint URL:"))
         self.broker_endpoint_edit = QLineEdit(self.settings_manager.get("external_agent.endpoint_url") or "")
         endpoint_layout.addWidget(self.broker_endpoint_edit)
-        
+
         # Outbox stats display label
         try:
             from app.destinations.external_outbox import ExternalOutbox
@@ -330,19 +367,41 @@ class MainWindow(QMainWindow):
         except Exception:
             stats = {"pending": 0, "sent": 0, "dead_letter": 0}
             
+        pending = stats.get("pending", 0) + stats.get("sending", 0)
+        sent = stats.get("sent", 0) + stats.get("completed", 0) + stats.get("processing", 0)
+        stuck = stats.get("dead_letter", 0)
+
         self.outbox_status_label = QLabel(
-            f"Local Outbox: {stats['pending']} pending, {stats['sent']} sent, {stats['dead_letter']} stuck"
+            f"Local Outbox: {pending} pending, {sent} sent, {stuck} stuck"
         )
         self.outbox_status_label.setStyleSheet("color: #555; font-size: 11px;")
         
-        # Retrying outbox button
+        # Retrying/Viewing outbox layout
         retry_layout = QHBoxLayout()
         retry_layout.addWidget(self.outbox_status_label)
-        
+
+        self.open_review_queue_btn = QPushButton("Review Queue")
+        self.open_review_queue_btn.clicked.connect(self.open_review_queue)
+        retry_layout.addWidget(self.open_review_queue_btn)
+        self.update_review_queue_button_label()
+
         self.retry_outbox_btn = QPushButton("Retry Outbox Now")
         self.retry_outbox_btn.clicked.connect(self.retry_outbox_now)
         retry_layout.addWidget(self.retry_outbox_btn)
+
+        self.view_outbox_btn = QPushButton("View Outbox")
+        self.view_outbox_btn.clicked.connect(self.view_outbox)
+        retry_layout.addWidget(self.view_outbox_btn)
+
         broker_layout.addLayout(retry_layout)
+
+        if self.controller:
+            self.controller.outbox_processed.connect(self.refresh_outbox_label)
+            
+        # Timer to refresh outbox status label automatically
+        self.outbox_refresh_timer = QTimer(self)
+        self.outbox_refresh_timer.timeout.connect(self.refresh_outbox_label)
+        self.outbox_refresh_timer.start(10000) # every 10 seconds
         
         main_layout.addWidget(broker_group)
 
@@ -461,8 +520,14 @@ class MainWindow(QMainWindow):
         self.settings_manager.set("agents.agents.openclaw.chat_id", self.openclaw_chat_edit.text().strip())
         self.settings_manager.set("agents.agents.openclaw.enabled", self.openclaw_enabled_chk.isChecked())
 
-        # Save Broker Settings
-        self.settings_manager.set("external_agent.enabled", self.broker_enabled_chk.isChecked())
+        # Save External Sharing Settings
+        selected_mode = self.sharing_mode_combo.currentData() or "off"
+        self.settings_manager.set("external_agent.sharing_mode", selected_mode)
+        self.settings_manager.set("external_agent.enabled", selected_mode != "off")
+        self.settings_manager.set("external_agent.include_full_transcript", self.include_transcript_chk.isChecked())
+        self.settings_manager.set("external_agent.default_item_kind", self.default_kind_combo.currentText())
+        self.settings_manager.set("external_agent.target_agent_default", self.target_agent_combo.currentText())
+        self.settings_manager.set("external_agent.trusted_pause_on_high_risk", self.pause_high_risk_chk.isChecked())
         self.settings_manager.set("external_agent.endpoint_url", self.broker_endpoint_edit.text().strip())
 
         if self.controller:
@@ -476,21 +541,78 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Success", "Settings saved successfully.")
         self.close()
 
+    def _set_sharing_mode_combo(self, mode: str) -> None:
+        idx = self.sharing_mode_combo.findData(mode)
+        if idx >= 0:
+            self.sharing_mode_combo.setCurrentIndex(idx)
+
+    def _on_sharing_mode_changed(self, index: int) -> None:
+        selected_mode = self.sharing_mode_combo.itemData(index)
+        if selected_mode == "trusted_auto":
+            confirm = QMessageBox.warning(
+                self,
+                "TRUSTED AUTOMATIC MODE WARNING",
+                "Trusted Auto mode automatically transmits captures externally without per-item human review.\n\n"
+                "Are you sure you want to enable Trusted Auto mode?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                self.sharing_mode_combo.blockSignals(True)
+                self.sharing_mode_combo.setCurrentIndex(self._previous_mode_idx)
+                self.sharing_mode_combo.blockSignals(False)
+                return
+        self._previous_mode_idx = index
+
+    def open_review_queue(self) -> None:
+        """Opens the outbound review queue dialog."""
+        from app.destinations.outbound_review_store import OutboundReviewStore
+        from app.ui.outbound_review_dialog import OutboundReviewDialog
+        store = OutboundReviewStore()
+        dialog = OutboundReviewDialog(store, settings_manager=self.settings_manager, parent=self)
+        dialog.exec()
+        self.update_review_queue_button_label()
+
+
+    def update_review_queue_button_label(self) -> None:
+        """Updates the pending count badge on the Review Queue button."""
+        try:
+            from app.destinations.outbound_review_store import OutboundReviewStore
+            awaiting = len(OutboundReviewStore().get_awaiting_review())
+            self.open_review_queue_btn.setText(f"Review Queue ({awaiting} pending)")
+        except Exception:
+            self.open_review_queue_btn.setText("Review Queue")
+
     def retry_outbox_now(self) -> None:
         """Trigger outbox transmission retry manually from settings."""
         if self.controller:
-            try:
-                from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
-                dispatcher = ExternalAgentDispatcher(self.settings_manager)
-                sent = dispatcher.retry_pending(manual=True)
-                from app.destinations.external_outbox import ExternalOutbox
-                stats = ExternalOutbox().get_stats()
-                self.outbox_status_label.setText(
-                    f"Local Outbox: {stats['pending']} pending, {stats['sent']} sent, {stats['dead_letter']} stuck"
-                )
-                QMessageBox.information(self, "Outbox Retry", f"Retried pending tasks. Sent {sent} tasks successfully.")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to retry outbox:\n{e}")
+            self.controller._retry_pending_outbox(manual=True)
+            QMessageBox.information(
+                self, 
+                "Outbox Retry Started", 
+                "Retry and status reconciliation started in the background. The counters will refresh automatically."
+            )
+
+    def view_outbox(self) -> None:
+        """Opens the outbox task manager dialog."""
+        from app.ui.outbox_dialog import OutboxDialog
+        dialog = OutboxDialog(self)
+        dialog.exec()
+        self.refresh_outbox_label()
+
+    def refresh_outbox_label(self) -> None:
+        """Refreshes the outbox stats display label from the database state."""
+        try:
+            from app.destinations.external_outbox import ExternalOutbox
+            stats = ExternalOutbox().get_stats()
+            pending = stats.get("pending", 0) + stats.get("sending", 0)
+            sent = stats.get("sent", 0) + stats.get("completed", 0) + stats.get("processing", 0)
+            stuck = stats.get("dead_letter", 0)
+            self.outbox_status_label.setText(
+                f"Local Outbox: {pending} pending, {sent} sent, {stuck} stuck"
+            )
+        except Exception:
+            pass
 
 def prompt_first_launch_vault_picker(settings_manager: SettingsManager) -> str:
     """Checks if vault path is configured. If not, shows a folder dialog picker."""

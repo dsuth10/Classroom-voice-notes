@@ -15,6 +15,7 @@ class AppController(QObject):
     note_saved = Signal(str)
     pipeline_finished = Signal(str)
     audio_level_updated = Signal(float)
+    outbox_processed = Signal(int, int)
 
     def __init__(self, settings_manager: SettingsManager) -> None:
         super().__init__()
@@ -32,6 +33,7 @@ class AppController(QObject):
         self.wakeword_worker: Any = None
         self.command_worker: Any = None
         self.pipeline_worker: Any = None
+        self.outbox_worker: Any = None
         
         self._is_cancelled = False
         
@@ -66,9 +68,11 @@ class AppController(QObject):
 
         # Initialize and start the outbox retry timer (every 60 seconds)
         self.outbox_retry_timer = QTimer(self)
-        self.outbox_retry_timer.timeout.connect(self._retry_pending_outbox)
-        if self.settings_manager.get("external_agent.enabled"):
+        self.outbox_retry_timer.timeout.connect(lambda: self._retry_pending_outbox(manual=False))
+        if self.settings_manager.external_sharing_enabled():
             self.outbox_retry_timer.start(60000)
+            # Trigger one outbox check shortly after startup in background
+            QTimer.singleShot(2000, lambda: self._retry_pending_outbox(manual=False))
 
     def set_state(self, new_state: str) -> None:
         old_state = self.state
@@ -338,8 +342,9 @@ class AppController(QObject):
         # Restart or stop the outbox retry timer depending on settings
         if hasattr(self, "outbox_retry_timer") and self.outbox_retry_timer:
             self.outbox_retry_timer.stop()
-            if self.settings_manager.get("external_agent.enabled"):
+            if self.settings_manager.external_sharing_enabled():
                 self.outbox_retry_timer.start(60000)
+                QTimer.singleShot(2000, lambda: self._retry_pending_outbox(manual=False))
 
     def cleanup(self) -> None:
         """Gracefully stops all background workers and the audio stream. Call before app exit."""
@@ -352,6 +357,17 @@ class AppController(QObject):
             self.index_timer.stop()
         if hasattr(self, 'outbox_retry_timer') and self.outbox_retry_timer:
             self.outbox_retry_timer.stop()
+        if self.outbox_worker:
+            if self.outbox_worker.isRunning():
+                self.outbox_worker.requestInterruption()
+                if not self.outbox_worker.wait(17000):
+                    log_audit_event(
+                        "OUTBOX_WORKER_SHUTDOWN_TIMEOUT",
+                        "controller",
+                        "Outbox worker did not stop before the shutdown timeout.",
+                    )
+            if not self.outbox_worker.isRunning():
+                self.outbox_worker = None
         self._stop_timers()
         self._stop_wake_word_worker()
         self._stop_command_worker()
@@ -388,14 +404,38 @@ class AppController(QObject):
             log_audit_event("DAILY_SUMMARY_TRIGGER_ERROR", "controller", f"Failed to generate summary: {e}")
 
     def _retry_pending_outbox(self, manual: bool = False) -> None:
-        """Retries sending any pending tasks from the local SQLite outbox."""
-        if self.settings_manager.get("external_agent.enabled"):
-            try:
-                from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
-                dispatcher = ExternalAgentDispatcher(self.settings_manager)
-                dispatcher.retry_pending(manual=manual)
-            except Exception as e:
-                log_audit_event("OUTBOX_RETRY_TIMER_ERROR", "controller", f"Failed to retry pending tasks: {e}")
+        """Starts the background worker to retry sending pending tasks and reconcile statuses."""
+        if not self.settings_manager.external_sharing_enabled():
+            return
+        
+        # Prevent starting multiple workers simultaneously
+        if self.outbox_worker and self.outbox_worker.isRunning():
+            return
+
+        try:
+            from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
+            dispatcher = ExternalAgentDispatcher(self.settings_manager)
+            
+            from app.destinations.outbox_worker import OutboxWorker
+            self.outbox_worker = OutboxWorker(dispatcher)
+            self.outbox_worker.manual = manual
+            self.outbox_worker.processed.connect(self._on_outbox_worker_finished)
+            self.outbox_worker.finished.connect(self._on_outbox_thread_finished)
+            self.outbox_worker.start()
+        except Exception as e:
+            log_audit_event("OUTBOX_RETRY_TIMER_ERROR", "controller", f"Failed to start outbox background worker: {e}")
+
+    def _on_outbox_worker_finished(self, sent_count: int, reconciled_count: int) -> None:
+        if sent_count > 0 or reconciled_count > 0:
+            log_audit_event("OUTBOX_TIMER_COMPLETE", "controller", f"Outbox worker completed. Sent {sent_count}, reconciled {reconciled_count}.")
+        self.outbox_processed.emit(sent_count, reconciled_count)
+
+    def _on_outbox_thread_finished(self) -> None:
+        worker = self.sender()
+        if worker is self.outbox_worker:
+            self.outbox_worker = None
+        if worker is not None:
+            worker.deleteLater()
 
 
 

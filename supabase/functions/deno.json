@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "lib": ["deno.window", "deno.ns", "dom"]
+  }
+}

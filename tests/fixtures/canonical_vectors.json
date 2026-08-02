@@ -1,0 +1,162 @@
+{
+  "_comment": "Canonical contract test vectors. Python and TypeScript must produce identical JSON strings and SHA-256 hashes.",
+  "vectors": [
+    {
+      "name": "basic_record_only",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "title": "Maths Lesson",
+        "category": "numeracy"
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"category\":\"numeracy\",\"title\":\"Maths Lesson\"},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "5b2809379f69c6496d8ac93badde4d872c1111f4e7ff26cf21e15c9413a3e8e3"
+    },
+    {
+      "name": "null_target_normalised",
+      "item_kind": "record_only",
+      "target_agent": null,
+      "content": {
+        "title": "Science Note",
+        "tags": [
+          "year4",
+          "biology"
+        ],
+        "details": {
+          "b": 2,
+          "a": 1
+        }
+      },
+      "task": {},
+      "expected_canonical_json": "{\"content\":{\"details\":{\"a\":1,\"b\":2},\"tags\":[\"year4\",\"biology\"],\"title\":\"Science Note\"},\"item_kind\":\"record_only\",\"target_agent\":\"\",\"task\":{}}",
+      "expected_hash": "1faf6f9f1cc6932e416af4c68f31a702e9329aa2a11827c04917b627297dd60f"
+    },
+    {
+      "name": "agent_task_full",
+      "item_kind": "agent_task",
+      "target_agent": "openclaw",
+      "content": {
+        "title": "Send Weekly Summary"
+      },
+      "task": {
+        "action": "notify_parents",
+        "recipient": "group_a"
+      },
+      "expected_canonical_json": "{\"content\":{\"title\":\"Send Weekly Summary\"},\"item_kind\":\"agent_task\",\"target_agent\":\"openclaw\",\"task\":{\"action\":\"notify_parents\",\"recipient\":\"group_a\"}}",
+      "expected_hash": "2284753277cee61fd85f7cad888c23e8be458c265570a30b230e0b2e28954777"
+    },
+    {
+      "name": "numbers_and_floats",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "score": 100,
+        "ratio": 0.5,
+        "whole_float": 1.0,
+        "negative": -5
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"negative\":-5,\"ratio\":0.5,\"score\":100,\"whole_float\":1},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "a3b2143d740130038f4f7d2423b476275edfcead9c32dd81a5a5517c2684051c"
+    },
+    {
+      "name": "unicode_and_quotes",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "text": "Cafe & Resume 'quotes' \"escaped\""
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"text\":\"Cafe & Resume 'quotes' \\\"escaped\\\"\"},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "ba088ace400fe29bab381880bf60fa273d6df2a7c66b0cdcd0e03b4f87166de9"
+    },
+    {
+      "name": "exponents_and_neg_zero",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "exp_pos": 1e+21,
+        "exp_small": 1e-07,
+        "neg_zero": -0.0,
+        "decimal": 0.125
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"decimal\":0.125,\"exp_pos\":1e+21,\"exp_small\":1e-7,\"neg_zero\":0},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "0c5329dbc30f35ddab6ee801b72c828480859d84614918e98d6231404fd48bc2"
+    },
+    {
+      "name": "nested_object_insertion_orders",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "z": {
+          "b": 2,
+          "a": 1
+        },
+        "a": {
+          "2": "two",
+          "1": "one"
+        }
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"a\":{\"1\":\"one\",\"2\":\"two\"},\"z\":{\"a\":1,\"b\":2}},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "0b0d76dad50cdf950a2a70f0bc042e155a15d0a959119cab8a3724574c16c94d"
+    },
+    {
+      "name": "array_order_preserved",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "list": [
+          3,
+          1,
+          2,
+          "b",
+          "a"
+        ]
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"list\":[3,1,2,\"b\",\"a\"]},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "fef71648efdb02ccc7d9624a7b88d358ed5a1ba8c42c63800894ad89dd8947e5"
+    },
+    {
+      "name": "nulls_and_booleans",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "active": true,
+        "archived": false,
+        "note": null
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"active\":true,\"archived\":false,\"note\":null},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "e679890c03311277473cb198b3d0e36a325e70c623585ff6380e4efa84eb99f7"
+    },
+    {
+      "name": "combining_chars_and_emoji",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "combining": "é",
+        "emoji": "😀"
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"combining\":\"é\",\"emoji\":\"😀\"},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "e6d835d0b6271a66a7dd203f744692a42d86e2184994dc3c66f01db6914e03f8"
+    },
+    {
+      "name": "non_bmp_keys",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "🌍": "world",
+        "a": "first",
+        "é": "accent"
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"a\":\"first\",\"é\":\"accent\",\"🌍\":\"world\"},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "574866a961fab5780ccc0ba671092be4b91d543bf6ba8a85bd7578da045d3fc5"
+    }
+  ]
+}

@@ -47,6 +47,11 @@ class TelegramDispatcher:
         
         Includes retry logic (2 retries with 3s delays).
         """
+        if hasattr(self.settings_manager, "external_sharing_enabled"):
+            if not self.settings_manager.external_sharing_enabled():
+                log_audit_event("TELEGRAM_RAW_SEND_DISABLED", "telegram", "External sharing mode is off; Telegram send disabled.")
+                return False
+
         token = self.settings_manager.get("agents.telegram_token")
         if not token:
             log_audit_event("TELEGRAM_RAW_SEND_FAILED", "telegram", "Bot token is missing.")
@@ -84,6 +89,11 @@ class TelegramDispatcher:
         
         Includes retry logic (2 retries with 3s delays) and updates local frontmatter.
         """
+        if hasattr(self.settings_manager, "external_sharing_enabled"):
+            if not self.settings_manager.external_sharing_enabled():
+                log_audit_event("TELEGRAM_DISPATCH_DISABLED", "telegram", "External sharing mode is off; Telegram dispatch disabled.")
+                return False
+
         token = self.settings_manager.get("agents.telegram_token")
         if not token:
             log_audit_event("TELEGRAM_DISPATCH_FAILED", "telegram", "Bot token is missing.")

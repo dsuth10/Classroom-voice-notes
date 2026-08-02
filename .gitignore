@@ -10,6 +10,7 @@ __pycache__/
 *.pyd
 .pytest_cache/
 .mypy_cache/
+.codex-test-temp/
 
 # Local Environment Keys (DO NOT COMMIT)
 .env
@@ -17,6 +18,9 @@ __pycache__/
 # Application config / logs
 settings.json
 audit.log
+run_debug.log
+crash.log
+*.log
 *.wav
 *.txt
 
@@ -27,6 +31,10 @@ bin/whisper/ggml-*.bin
 Obsidian/Joshua Note Exchange/Classroom Voice Notes/
 **/.obsidian/workspace.json
 **/workspace.json.bak
+# Scratch / one-off test scripts (may contain secrets — NEVER commit)
+scratch/
 
+# Supabase CLI ephemeral state
+supabase/.temp/
 
 

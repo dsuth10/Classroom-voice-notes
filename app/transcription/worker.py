@@ -118,17 +118,22 @@ class PipelineWorker(QThread):
             # Bypassed if the new Supabase broker is active to prevent double-sending
             if (telegram_allowed 
                 and self.settings_manager.get("agents.enabled")
-                and not self.settings_manager.get("external_agent.enabled")):
+                and not self.settings_manager.external_sharing_enabled()):
                 from app.destinations.telegram_dispatcher import TelegramDispatcher
                 dispatcher = TelegramDispatcher(self.settings_manager)
                 dispatcher.dispatch(transcript, classification, note_path)
             
-            # 5b. New broker route (independent of Telegram)
-            if (classification.get("category") == "agent_task"
-                and self.settings_manager.get("external_agent.enabled")):
-                from app.destinations.external_agent_dispatcher import ExternalAgentDispatcher
-                broker_dispatcher = ExternalAgentDispatcher(self.settings_manager)
-                broker_dispatcher.dispatch(classification, note_path, transcript)
+            # 5b. Central outbound routing service (handles off, safe_auto, review_all, trusted_auto)
+            from datetime import timezone
+            from app.destinations.outbound_routing_service import OutboundRoutingService
+            routing_service = OutboundRoutingService(self.settings_manager)
+            routing_service.handle_capture(
+                classification=classification,
+                transcript=transcript,
+                note_path=note_path,
+                recorded_at=datetime.now(timezone.utc).isoformat(),
+                duration_seconds=self.duration_seconds,
+            )
             
             # 6. Copy WAV file to Obsidian Vault Audio directory and clean up temporary audio file
             if note_path and os.path.exists(self.wav_path):

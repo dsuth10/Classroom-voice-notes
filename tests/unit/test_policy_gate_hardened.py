@@ -261,3 +261,43 @@ def test_policy_gate_domain_unauthorized_blocks(temp_vault: Path, default_payloa
         config=default_config
     )
     assert allowed is False
+
+def test_assess_outbound_structured_result(temp_vault: Path, default_payload: dict, default_config: dict) -> None:
+    gate = PolicyGate()
+    assessment = gate.assess_outbound(
+        category="agent_task",
+        sensitivity="non_sensitive",
+        safe_task={"title": "Clean desks", "instructions": "Clean desks."},
+        transcript="Please clean desks.",
+        payload=default_payload,
+        source_device_id="device-001",
+        target_agent="hermes",
+        endpoint_url="https://ref.supabase.co/functions/v1/cvn-submit",
+        vault_path=str(temp_vault),
+        config=default_config
+    )
+    assert assessment.automatic_classification == "non_sensitive"
+    assert assessment.risk_level == "low"
+    assert assessment.safe_auto_allowed is True
+    assert len(assessment.findings) == 0
+
+def test_assess_outbound_high_risk_findings(temp_vault: Path, default_payload: dict, default_config: dict) -> None:
+    gate = PolicyGate()
+    assessment = gate.assess_outbound(
+        category="agent_task",
+        sensitivity="student_sensitive",
+        safe_task={"title": "Clean desks", "instructions": "Clean desks."},
+        transcript="Sam Jones is missing.",
+        payload=default_payload,
+        source_device_id="device-001",
+        target_agent="hermes",
+        endpoint_url="https://ref.supabase.co/functions/v1/cvn-submit",
+        vault_path=str(temp_vault),
+        config=default_config
+    )
+    assert assessment.risk_level == "high"
+    assert assessment.safe_auto_allowed is False
+    assert "sensitivity_student_sensitive" in assessment.findings
+    assert "student_name_match" in assessment.findings
+    assert len(assessment.suggested_redactions) > 0
+

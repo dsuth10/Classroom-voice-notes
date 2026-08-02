@@ -1,0 +1,243 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+export type AuthenticatedClient = {
+  key_id: string;
+  source_device_id?: string;
+  environment: string;
+};
+
+export class ClientAuthenticationError extends Error {
+  constructor(message: string = "Unauthorized") {
+    super(message);
+    this.name = "ClientAuthenticationError";
+  }
+}
+
+export function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+export async function hmacSha256Hex(
+  body: string,
+  secret: string,
+): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function sha256Hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(s),
+  );
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+const MAX_TIMESTAMP_AGE_SECONDS = 300;
+
+/**
+ * Authenticates an incoming client request and derives its server-verified client_key_id.
+ * Caller-supplied client_key_id in body or header is verified against server credentials.
+ */
+export async function authenticateClient(
+  req: Request,
+  bodyText: string,
+  supabaseClient?: any,
+): Promise<AuthenticatedClient> {
+  const authHeader = req.headers.get("authorization") ?? "";
+  const signature = req.headers.get("x-cvn-signature") ?? "";
+  const keyIdHeader = req.headers.get("x-cvn-client-key-id") ??
+    req.headers.get("x-cvn-key-id") ??
+    "";
+  const timestampStr = req.headers.get("x-cvn-timestamp") ?? "";
+  const nonce = req.headers.get("x-cvn-nonce") ?? "";
+
+  if (!authHeader.startsWith("Bearer ")) {
+    throw new ClientAuthenticationError(
+      "Missing or invalid authorization header",
+    );
+  }
+  if (!signature) {
+    throw new ClientAuthenticationError("Missing signature header");
+  }
+  if (!keyIdHeader) {
+    throw new ClientAuthenticationError("Missing client key ID header");
+  }
+  if (!timestampStr) {
+    throw new ClientAuthenticationError("Missing timestamp header");
+  }
+  if (!nonce) {
+    throw new ClientAuthenticationError("Missing nonce header");
+  }
+
+  const providedBearer = authHeader.slice(7);
+
+  // 1. Timestamp Freshness Check
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const reqTimestamp = parseInt(timestampStr, 10);
+  if (
+    isNaN(reqTimestamp) ||
+    Math.abs(nowSeconds - reqTimestamp) > MAX_TIMESTAMP_AGE_SECONDS
+  ) {
+    throw new ClientAuthenticationError("Stale or invalid request timestamp");
+  }
+
+  const resolvedKeyId = keyIdHeader;
+
+  // 2. Registry-based Multi-Client Identity Path
+  const registryJson = Deno.env.get("CVN_CLIENT_CREDENTIALS") ?? "";
+  if (registryJson) {
+    let registry: any;
+    try {
+      registry = JSON.parse(registryJson);
+    } catch (_e) {
+      throw new ClientAuthenticationError(
+        "Malformed client credentials registry",
+      );
+    }
+
+    if (
+      registry.version !== "1.0" ||
+      typeof registry.clients !== "object" ||
+      registry.clients === null
+    ) {
+      throw new ClientAuthenticationError(
+        "Invalid client credentials registry schema",
+      );
+    }
+
+    const clientConfig = registry.clients[resolvedKeyId];
+    if (!clientConfig || clientConfig.enabled !== true) {
+      throw new ClientAuthenticationError(
+        "Client identity not found or disabled",
+      );
+    }
+
+    const providedBearerHash = await sha256Hex(providedBearer);
+    const expectedBearerHash = await sha256Hex(clientConfig.bearer_token);
+    if (!timingSafeEqual(providedBearerHash, expectedBearerHash)) {
+      throw new ClientAuthenticationError("Invalid bearer token");
+    }
+
+    const url = new URL(req.url);
+    const canonicalSigText =
+      `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
+
+    const expectedSig = await hmacSha256Hex(
+      canonicalSigText,
+      clientConfig.hmac_secret,
+    );
+    if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
+      throw new ClientAuthenticationError("Invalid signature");
+    }
+
+    // 3. Mandatory Atomic Database Nonce Replay Protection Registration
+    const sbUrl = Deno.env.get("SUPABASE_URL");
+    const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const client = supabaseClient ||
+      (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
+
+    if (!client) {
+      throw new ClientAuthenticationError(
+        "Server misconfigured: database client required for nonce replay protection",
+      );
+    }
+
+    const { data: registered, error } = await client.rpc(
+      "cvn_register_request_nonce",
+      {
+        p_credential_type: "client",
+        p_key_id: resolvedKeyId,
+        p_nonce: nonce,
+        p_timestamp: reqTimestamp,
+        p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
+      },
+    );
+    if (error || registered !== true) {
+      throw new ClientAuthenticationError(
+        "Nonce already used or timestamp expired",
+      );
+    }
+
+    return {
+      key_id: resolvedKeyId,
+      source_device_id: clientConfig.source_device_id,
+      environment: Deno.env.get("CVN_ENVIRONMENT") || "staging",
+    };
+  }
+
+  // 4. Single-Client Environment Credential Fallback Path
+  const envBearer = Deno.env.get("CVN_BEARER_TOKEN") ?? "";
+  const envHmac = Deno.env.get("CVN_HMAC_SECRET") ?? "";
+
+  if (!envBearer || !envHmac) {
+    throw new ClientAuthenticationError(
+      "Client authentication unconfigured on server",
+    );
+  }
+
+  const providedBearerHash = await sha256Hex(providedBearer);
+  const envBearerHash = await sha256Hex(envBearer);
+  if (!timingSafeEqual(providedBearerHash, envBearerHash)) {
+    throw new ClientAuthenticationError("Invalid bearer token");
+  }
+
+  const url = new URL(req.url);
+  const canonicalSigText =
+    `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
+
+  const expectedSig = await hmacSha256Hex(canonicalSigText, envHmac);
+  if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
+    throw new ClientAuthenticationError("Invalid signature");
+  }
+
+  // Mandatory Atomic Database Nonce Replay Protection Registration
+  const sbUrl = Deno.env.get("SUPABASE_URL");
+  const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const client = supabaseClient ||
+    (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
+
+  if (!client) {
+    throw new ClientAuthenticationError(
+      "Server misconfigured: database client required for nonce replay protection",
+    );
+  }
+
+  const { data: registered, error } = await client.rpc(
+    "cvn_register_request_nonce",
+    {
+      p_credential_type: "client",
+      p_key_id: resolvedKeyId,
+      p_nonce: nonce,
+      p_timestamp: reqTimestamp,
+      p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
+    },
+  );
+  if (error || registered !== true) {
+    throw new ClientAuthenticationError(
+      "Nonce already used or timestamp expired",
+    );
+  }
+
+  return {
+    key_id: resolvedKeyId,
+    environment: Deno.env.get("CVN_ENVIRONMENT") || "staging",
+  };
+}
