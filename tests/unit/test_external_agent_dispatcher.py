@@ -145,6 +145,57 @@ def test_dispatcher_dispatch_network_failure(
 @patch.dict(os.environ, {"CVN_BROKER_ENV": "staging"})
 @patch("app.config.keyring_store.get_secret")
 @patch("app.destinations.external_agent_dispatcher.httpx.post")
+def test_retry_pending_generates_fresh_request_nonces_per_attempt(
+    mock_post: MagicMock,
+    mock_keyring: MagicMock,
+    mock_settings: MagicMock,
+    mock_outbox: ExternalOutbox,
+) -> None:
+    mock_keyring.side_effect = lambda ref: "mock_secret_val" if "cvn_broker_hmac_secret" in ref or "cvn_broker_bearer_token" in ref or ref in ("cvn_hmac_secret", "cvn_bearer_token") else None
+
+    payload_nonce = "payload-nonce-12345678"
+    mock_outbox.enqueue(
+        task_id="CVN-RETRY-NONCE-TEST",
+        endpoint_url="https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-submit-outbound-item",
+        payload_json=json.dumps({"task_id": "CVN-RETRY-NONCE-TEST", "nonce": payload_nonce}),
+        payload_hash="hash",
+        idempotency_key="idem-retry-nonce",
+        nonce=payload_nonce,
+        schema_version="cvn.outbound_item.v2",
+    )
+
+    dispatcher = ExternalAgentDispatcher(mock_settings, mock_outbox)
+    
+    # Attempt 1 (HTTP failure)
+    mock_post.return_value = MagicMock(status_code=500, text="Internal Error")
+    dispatcher.retry_pending()
+    
+    # Reset next_retry_at so it is eligible again immediately
+    import sqlite3
+    with sqlite3.connect(mock_outbox.db_path) as conn:
+        conn.execute("UPDATE outbox SET status = 'pending', next_retry_at = CURRENT_TIMESTAMP")
+    
+    # Attempt 2
+    mock_post.return_value = MagicMock(status_code=200, json=lambda: {"msg_id": "MSG-99"})
+    dispatcher.retry_pending()
+
+    assert mock_post.call_count == 2
+    
+    headers_attempt_1 = mock_post.call_args_list[0].kwargs["headers"]
+    headers_attempt_2 = mock_post.call_args_list[1].kwargs["headers"]
+
+    request_nonce_1 = headers_attempt_1["X-CVN-Nonce"]
+    request_nonce_2 = headers_attempt_2["X-CVN-Nonce"]
+
+    # Each attempt must have a fresh request nonce, separate from the payload nonce
+    assert request_nonce_1 != request_nonce_2
+    assert request_nonce_1 != payload_nonce
+    assert request_nonce_2 != payload_nonce
+
+
+@patch.dict(os.environ, {"CVN_BROKER_ENV": "staging"})
+@patch("app.config.keyring_store.get_secret")
+@patch("app.destinations.external_agent_dispatcher.httpx.post")
 def test_retry_pending_rejects_unapproved_endpoint(
     mock_post: MagicMock,
     mock_keyring: MagicMock,

@@ -97,7 +97,6 @@ serve(async (req: Request) => {
     );
   }
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data, error } = await supabase.rpc("cvn_complete_outbound_item", {
     p_item_id: itemId,
     p_worker_id: workerId,

@@ -148,28 +148,32 @@ export async function authenticateClient(
       throw new ClientAuthenticationError("Invalid signature");
     }
 
-    // 3. Atomic Database Nonce Replay Protection Registration
+    // 3. Mandatory Atomic Database Nonce Replay Protection Registration
     const sbUrl = Deno.env.get("SUPABASE_URL");
     const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const client =
       supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
 
-    if (client) {
-      const { data: registered, error } = await client.rpc(
-        "cvn_register_request_nonce",
-        {
-          p_credential_type: "client",
-          p_key_id: resolvedKeyId,
-          p_nonce: nonce,
-          p_timestamp: reqTimestamp,
-          p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
-        },
+    if (!client) {
+      throw new ClientAuthenticationError(
+        "Server misconfigured: database client required for nonce replay protection",
       );
-      if (error || registered !== true) {
-        throw new ClientAuthenticationError(
-          "Nonce already used or timestamp expired",
-        );
-      }
+    }
+
+    const { data: registered, error } = await client.rpc(
+      "cvn_register_request_nonce",
+      {
+        p_credential_type: "client",
+        p_key_id: resolvedKeyId,
+        p_nonce: nonce,
+        p_timestamp: reqTimestamp,
+        p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
+      },
+    );
+    if (error || registered !== true) {
+      throw new ClientAuthenticationError(
+        "Nonce already used or timestamp expired",
+      );
     }
 
     return {
@@ -203,28 +207,32 @@ export async function authenticateClient(
     throw new ClientAuthenticationError("Invalid signature");
   }
 
-  // Atomic Database Nonce Replay Protection Registration
+  // Mandatory Atomic Database Nonce Replay Protection Registration
   const sbUrl = Deno.env.get("SUPABASE_URL");
   const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const client =
     supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
 
-  if (client) {
-    const { data: registered, error } = await client.rpc(
-      "cvn_register_request_nonce",
-      {
-        p_credential_type: "client",
-        p_key_id: resolvedKeyId,
-        p_nonce: nonce,
-        p_timestamp: reqTimestamp,
-        p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
-      },
+  if (!client) {
+    throw new ClientAuthenticationError(
+      "Server misconfigured: database client required for nonce replay protection",
     );
-    if (error || registered !== true) {
-      throw new ClientAuthenticationError(
-        "Nonce already used or timestamp expired",
-      );
-    }
+  }
+
+  const { data: registered, error } = await client.rpc(
+    "cvn_register_request_nonce",
+    {
+      p_credential_type: "client",
+      p_key_id: resolvedKeyId,
+      p_nonce: nonce,
+      p_timestamp: reqTimestamp,
+      p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
+    },
+  );
+  if (error || registered !== true) {
+    throw new ClientAuthenticationError(
+      "Nonce already used or timestamp expired",
+    );
   }
 
   return {

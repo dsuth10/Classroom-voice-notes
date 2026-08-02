@@ -176,7 +176,6 @@ serve(async (req: Request) => {
   }
 
   // Nonce replay protection
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const requestHash = await sha256Hex(body);
   const { error: nonceError } = await supabase
     .from("cvn_processed_nonces")

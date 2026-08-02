@@ -6,7 +6,7 @@ import { authenticateClient } from "../_shared/client_auth.ts";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-cvn-signature, content-type",
+    "authorization, x-cvn-signature, x-cvn-client-key-id, x-cvn-key-id, x-cvn-timestamp, x-cvn-nonce, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -196,11 +196,7 @@ serve(async (req: Request) => {
     );
   }
 
-  // 6. DB Client initialization and execution
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-
-  // Check nonce replay protection for client requests
-  // Insert into cvn_processed_nonces (nonces table has UNIQUE constraint on nonce)
+  // 6. DB Client execution
   const payloadHash = await sha256Hex(body);
   const { error: nonceError } = await supabase
     .from("cvn_processed_nonces")

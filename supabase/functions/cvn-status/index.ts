@@ -88,6 +88,7 @@ serve(async (req: Request) => {
   const canonicalString = `GET\n/functions/v1/cvn-status/${taskId}\ntask_id=${taskId}\nsigned_at=${signedAt}\nnonce=${nonce}`;
 
   // 4. Authenticate Client vs Worker
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const authHeader = req.headers.get("authorization") ?? "";
   const keyId = req.headers.get("x-cvn-key-id") ?? "";
   let principal = null;
@@ -117,7 +118,6 @@ serve(async (req: Request) => {
 
   if (!isClient) {
     // Attempt worker authentication
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
     try {
       principal = await authenticateWorker(req, canonicalString, supabase);
     } catch (e) {
@@ -133,7 +133,6 @@ serve(async (req: Request) => {
   }
 
   // 5. Nonce replay protection
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const requestHash = await sha256Hex(canonicalString);
   const { error: nonceError } = await supabase
     .from("cvn_processed_nonces")

@@ -195,26 +195,30 @@ export async function authenticateWorker(
     throw new AuthenticationError("Invalid signature");
   }
 
-  // 5. Atomic Database Nonce Replay Protection Registration
+  // 5. Mandatory Atomic Database Nonce Replay Protection Registration
   const sbUrl = Deno.env.get("SUPABASE_URL");
   const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const client =
     supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
 
-  if (client) {
-    const { data: registered, error } = await client.rpc(
-      "cvn_register_request_nonce",
-      {
-        p_credential_type: "worker",
-        p_key_id: keyId,
-        p_nonce: nonce,
-        p_timestamp: reqTimestamp,
-        p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
-      },
+  if (!client) {
+    throw new AuthenticationError(
+      "Server misconfigured: database client required for nonce replay protection",
     );
-    if (error || registered !== true) {
-      throw new AuthenticationError("Nonce already used or timestamp expired");
-    }
+  }
+
+  const { data: registered, error } = await client.rpc(
+    "cvn_register_request_nonce",
+    {
+      p_credential_type: "worker",
+      p_key_id: keyId,
+      p_nonce: nonce,
+      p_timestamp: reqTimestamp,
+      p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
+    },
+  );
+  if (error || registered !== true) {
+    throw new AuthenticationError("Nonce already used or timestamp expired");
   }
 
   return {

@@ -30,16 +30,17 @@ serve(async (req: Request) => {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   try {
     await authenticateWorker(req, text, supabase);
-  } catch (err) {
-    if (err instanceof AuthenticationError) {
-      return new Response(
-        JSON.stringify({ error: "unauthorized", message: err.message }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
-    }
+  } catch (err: any) {
+    return new Response(
+      JSON.stringify({
+        error: "unauthorized",
+        message: err.message || "Worker authentication failed",
+      }),
+      {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   }
 
   let itemId = "";
@@ -48,7 +49,6 @@ serve(async (req: Request) => {
     itemId = url.searchParams.get("item_id") ?? "";
   } else if (req.method === "POST") {
     try {
-      const text = await req.text();
       if (text) {
         const body = JSON.parse(text);
         itemId = body.item_id ?? "";
@@ -68,7 +68,6 @@ serve(async (req: Request) => {
     });
   }
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data, error } = await supabase.rpc("cvn_get_outbound_item_status", {
     p_item_id: itemId,
   });

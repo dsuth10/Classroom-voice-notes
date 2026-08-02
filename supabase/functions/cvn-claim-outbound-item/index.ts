@@ -125,7 +125,6 @@ serve(async (req: Request) => {
   const reqTimeout = body.visibility_timeout_seconds || 300;
   const visibilityTimeout = Math.min(Math.max(reqTimeout, 30), maxTimeout);
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data, error } = await supabase.rpc("cvn_claim_outbound_item", {
     p_worker_id: workerId,
     p_visibility_timeout_seconds: visibilityTimeout,
