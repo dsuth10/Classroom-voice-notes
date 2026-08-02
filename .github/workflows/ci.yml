@@ -48,7 +48,7 @@ jobs:
         run: uv run --frozen mypy app
 
       - name: Install Deno
-        uses: denoland/setup-deno@909cc534f374ed56e7e97d2600451a2a4668f44d # v2.0.2
+        uses: denoland/setup-deno@909cc5acb0fdd60627fb858598759246509fa755 # v2.0.2
         with:
           deno-version: 1.46.3
 

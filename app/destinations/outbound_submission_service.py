@@ -106,41 +106,7 @@ class OutboundSubmissionService:
             if release_basis != expected_basis:
                 raise ValueError(f"ERR_RELEASE_BASIS_MISMATCH: Release basis '{release_basis}' conflicts with approval_method '{approval_method}'.")
 
-            # 5. Build v2 payload
-            hmac_secret: str = ""
-            try:
-                from app.config import keyring_store
-                from app.config.environment import get_env_credential_ref
-                hmac_ref = get_env_credential_ref("hmac_secret")
-                hmac_secret = keyring_store.get_secret(hmac_ref) or ""
-            except Exception:
-                pass
-
-            payload, payload_str, payload_hash = build_outbound_payload_v2(
-                item_id=item_id,
-                source_device_id=source_device_id,
-                item_kind=item_kind,
-                target_agent=target_agent,
-                content=content,
-                automatic_classification=automatic_classification,
-                risk_level=risk_level,
-                findings=findings_list,
-                release_basis=release_basis,
-                approval_metadata={
-                    "approved_at": item.get("approved_at"),
-                    "approved_content_hash": approved_content_hash,
-                    "reviewer_type": approval_method,
-                },
-                task=task,
-                checks_passed=checks_passed_list,
-            )
-
-            if hmac_secret:
-                _, payload_str, payload_hash, _ = refresh_transport_signature(
-                    payload, hmac_secret
-                )
-
-            # 6. Require validated v2 endpoint from submission_endpoint()
+            # 5. Require validated v2 endpoint from submission_endpoint()
             schema_version = "cvn.outbound_item.v2"
             try:
                 base_url = self.settings_manager.get("external_agent.endpoint_url", "")
@@ -156,7 +122,7 @@ class OutboundSubmissionService:
                 )
                 raise ValueError(f"ERR_ENDPOINT_RESOLUTION_FAILED: Failed to resolve endpoint for schema '{schema_version}': {ep_err}")
 
-            # 7. Check existing outbox row for exact identity match vs conflict
+            # 6. Check existing outbox row first — reuse if approved business identity matches
             existing_outbox = self.outbox.get_by_task_id(item_id)
             if existing_outbox:
                 mismatches = []
@@ -170,14 +136,6 @@ class OutboundSubmissionService:
                     mismatches.append("content_hash")
                 if existing_outbox.get("release_basis") != release_basis:
                     mismatches.append("release_basis")
-                if existing_outbox.get("endpoint_url") != endpoint_url:
-                    mismatches.append("endpoint_url")
-                if existing_outbox.get("payload_hash") != payload_hash:
-                    mismatches.append("payload_hash")
-                if existing_outbox.get("idempotency_key") != payload.get("idempotency_key"):
-                    mismatches.append("idempotency_key")
-                if existing_outbox.get("nonce") != payload.get("nonce"):
-                    mismatches.append("nonce")
 
                 if mismatches:
                     conflict_msg = f"ERR_OUTBOX_CONFLICT: Existing outbox entry for '{item_id}' has conflicting fields: {', '.join(mismatches)}"
@@ -185,6 +143,40 @@ class OutboundSubmissionService:
 
                 local_id = int(existing_outbox["local_id"])
             else:
+                # 7. Build v2 payload only when no outbox entry exists
+                hmac_secret: str = ""
+                try:
+                    from app.config import keyring_store
+                    from app.config.environment import get_env_credential_ref
+                    hmac_ref = get_env_credential_ref("hmac_secret")
+                    hmac_secret = keyring_store.get_secret(hmac_ref) or ""
+                except Exception:
+                    pass
+
+                payload, payload_str, payload_hash = build_outbound_payload_v2(
+                    item_id=item_id,
+                    source_device_id=source_device_id,
+                    item_kind=item_kind,
+                    target_agent=target_agent,
+                    content=content,
+                    automatic_classification=automatic_classification,
+                    risk_level=risk_level,
+                    findings=findings_list,
+                    release_basis=release_basis,
+                    approval_metadata={
+                        "approved_at": item.get("approved_at"),
+                        "approved_content_hash": approved_content_hash,
+                        "reviewer_type": approval_method,
+                    },
+                    task=task,
+                    checks_passed=checks_passed_list,
+                )
+
+                if hmac_secret:
+                    _, payload_str, payload_hash, _ = refresh_transport_signature(
+                        payload, hmac_secret
+                    )
+
                 local_id = self.outbox.enqueue(
                     task_id=item_id,
                     endpoint_url=endpoint_url,

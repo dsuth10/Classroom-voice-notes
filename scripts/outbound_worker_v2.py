@@ -24,15 +24,19 @@ class OutboundWorkerV2:
         self,
         edge_base_url: Optional[str] = None,
         worker_bearer_token: Optional[str] = None,
+        worker_hmac_secret: Optional[str] = None,
         worker_id: Optional[str] = None,
+        worker_key_id: Optional[str] = None,
         poll_interval_seconds: float = 2.0,
         visibility_timeout_seconds: int = 300,
     ) -> None:
         sb_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
         default_edge_url = f"{sb_url}/functions/v1" if sb_url else ""
         self.edge_base_url = (edge_base_url or os.environ.get("CVN_EDGE_BASE_URL") or default_edge_url).rstrip("/")
-        self.worker_bearer_token = worker_bearer_token or os.environ.get("CVN_WORKER_BEARER_TOKEN") or os.environ.get("CVN_BEARER_TOKEN") or ""
+        self.worker_bearer_token = worker_bearer_token or os.environ.get("CVN_WORKER_BEARER_TOKEN", "")
+        self.worker_hmac_secret = worker_hmac_secret or os.environ.get("CVN_WORKER_HMAC_SECRET", "")
         self.worker_id = worker_id or os.environ.get("CVN_WORKER_ID", "openclaw-worker-v2-1")
+        self.worker_key_id = worker_key_id or os.environ.get("CVN_WORKER_KEY_ID", self.worker_id)
         self.poll_interval = poll_interval_seconds
         self.visibility_timeout = visibility_timeout_seconds
         self.running = True
@@ -44,26 +48,50 @@ class OutboundWorkerV2:
         logger.info(f"Worker {self.worker_id} received stop signal; shutting down gracefully.")
         self.running = False
 
-    def _headers(self) -> Dict[str, str]:
+    def _make_headers(self, method: str, path: str, body_str: str) -> Dict[str, str]:
+        import hashlib
+        import hmac
+        import uuid
+
+        timestamp = str(int(time.time()))
+        nonce = uuid.uuid4().hex
+
+        canonical_text = f"{method.upper()}|{path}|{body_str}"
+        sig = hmac.new(
+            self.worker_hmac_secret.encode("utf-8"),
+            canonical_text.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
         return {
             "Authorization": f"Bearer {self.worker_bearer_token}",
             "Content-Type": "application/json",
-            "X-CVN-Key-Id": self.worker_id,
+            "X-CVN-Key-Id": self.worker_key_id,
+            "X-CVN-Signature": sig,
+            "X-CVN-Timestamp": timestamp,
+            "X-CVN-Nonce": nonce,
         }
 
     def claim_item(self) -> Optional[Dict[str, Any]]:
         """Claims the next processable v2 outbound item via Edge claim endpoint."""
         import urllib.request
+        from urllib.parse import urlparse
 
+        endpoint_path = "/functions/v1/cvn-claim-outbound-item"
         url = f"{self.edge_base_url}/cvn-claim-outbound-item"
+        parsed = urlparse(url)
+        path = parsed.path or endpoint_path
+
         payload = {
             "worker_id": self.worker_id,
             "visibility_timeout_seconds": self.visibility_timeout,
             "allowed_kinds": ["record_only", "agent_task"],
             "allowed_agents": ["openclaw"],
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=self._headers(), method="POST")
+        body_str = json.dumps(payload)
+        data = body_str.encode("utf-8")
+        headers = self._make_headers("POST", path, body_str)
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
@@ -91,8 +119,8 @@ class OutboundWorkerV2:
                 "target_agent": item.get("target_agent"),
                 "worker_id": self.worker_id,
             }
-            self.complete_item(item_id, lease_token, payload_hash, content_hash, result_payload)
-            return True
+            completed = self.complete_item(item_id, lease_token, payload_hash, content_hash, result_payload)
+            return completed
         except Exception as exc:
             logger.error(f"Failed processing item {item_id}: {exc}")
             self.fail_item(item_id, lease_token, str(exc), retryable=True)
@@ -108,8 +136,13 @@ class OutboundWorkerV2:
     ) -> bool:
         """Marks item completed using worker_id, lease_token, payload_hash, and content_hash via Edge complete endpoint."""
         import urllib.request
+        from urllib.parse import urlparse
 
+        endpoint_path = "/functions/v1/cvn-complete-outbound-item"
         url = f"{self.edge_base_url}/cvn-complete-outbound-item"
+        parsed = urlparse(url)
+        path = parsed.path or endpoint_path
+
         payload = {
             "item_id": item_id,
             "worker_id": self.worker_id,
@@ -118,15 +151,20 @@ class OutboundWorkerV2:
             "content_hash": content_hash,
             "result_json": result_json,
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=self._headers(), method="POST")
+        body_str = json.dumps(payload)
+        data = body_str.encode("utf-8")
+        headers = self._make_headers("POST", path, body_str)
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 res_body = resp.read().decode("utf-8")
                 res_json = json.loads(res_body)
-                logger.info(f"Successfully completed item {item_id}: {res_json}")
-                return True
+                if isinstance(res_json, dict) and res_json.get("success"):
+                    logger.info(f"Successfully completed item {item_id}: {res_json}")
+                    return True
+                logger.error(f"Completion rejected for item {item_id}: {res_json}")
+                return False
         except Exception as exc:
             logger.error(f"Failed to complete item {item_id} via Edge endpoint: {exc}")
             return False
@@ -140,8 +178,13 @@ class OutboundWorkerV2:
     ) -> bool:
         """Marks item failed with retry disposition using worker_id and lease_token via Edge fail endpoint."""
         import urllib.request
+        from urllib.parse import urlparse
 
+        endpoint_path = "/functions/v1/cvn-fail-outbound-item"
         url = f"{self.edge_base_url}/cvn-fail-outbound-item"
+        parsed = urlparse(url)
+        path = parsed.path or endpoint_path
+
         payload = {
             "item_id": item_id,
             "worker_id": self.worker_id,
@@ -149,15 +192,20 @@ class OutboundWorkerV2:
             "failure_reason": failure_reason,
             "retryable": retryable,
         }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=self._headers(), method="POST")
+        body_str = json.dumps(payload)
+        data = body_str.encode("utf-8")
+        headers = self._make_headers("POST", path, body_str)
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
 
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 res_body = resp.read().decode("utf-8")
                 res_json = json.loads(res_body)
-                logger.warning(f"Failed item {item_id}: {res_json}")
-                return True
+                if isinstance(res_json, dict) and res_json.get("success"):
+                    logger.warning(f"Recorded failure for item {item_id}: {res_json}")
+                    return True
+                logger.error(f"Fail recording rejected for item {item_id}: {res_json}")
+                return False
         except Exception as exc:
             logger.error(f"Failed to record failure for item {item_id} via Edge endpoint: {exc}")
             return False

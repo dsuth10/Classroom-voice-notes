@@ -56,6 +56,7 @@ DROP FUNCTION IF EXISTS public.cvn_claim_outbound_item(text, integer, text[], te
 DROP FUNCTION IF EXISTS public.cvn_claim_outbound_item(text, integer, text[], text[], text, text);
 
 DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item(text, text, jsonb);
+DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item(text, text, text, jsonb);
 DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item(text, text, jsonb, text, text);
 DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item(text, text, text, text, text, jsonb);
 

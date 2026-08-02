@@ -69,10 +69,35 @@ serve(async (req: Request) => {
     workerId = authWorker.allowed_worker_ids[0] || authWorker.key_id;
   }
 
-  const allowedKinds = body.allowed_kinds || ["record_only", "agent_task"];
-  const allowedAgents = body.allowed_agents || authWorker.allowed_targets;
+  // Intersect requested allowed_kinds with server authWorker.allowed_kinds
+  const reqKinds = Array.isArray(body.allowed_kinds) ? body.allowed_kinds : ["record_only", "agent_task"];
+  const allowedKinds = reqKinds.filter((k: string) => authWorker.allowed_kinds.includes(k));
+  if (allowedKinds.length === 0) {
+    return new Response(
+      JSON.stringify({
+        error: "worker_scope_unauthorized",
+        message: "No requested item_kinds match worker key permissions",
+      }),
+      { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
 
-  const visibilityTimeout = Math.min(Math.max(body.visibility_timeout_seconds || 300, 30), 900);
+  // Intersect requested allowed_agents with server authWorker.allowed_targets
+  const reqAgents = Array.isArray(body.allowed_agents) ? body.allowed_agents : authWorker.allowed_targets;
+  const allowedAgents = reqAgents.filter((a: string) => authWorker.allowed_targets.includes(a));
+  if (allowedAgents.length === 0) {
+    return new Response(
+      JSON.stringify({
+        error: "worker_scope_unauthorized",
+        message: "No requested target_agents match worker key permissions",
+      }),
+      { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+
+  const maxTimeout = authWorker.max_visibility_timeout || 300;
+  const reqTimeout = body.visibility_timeout_seconds || 300;
+  const visibilityTimeout = Math.min(Math.max(reqTimeout, 30), maxTimeout);
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data, error } = await supabase.rpc("cvn_claim_outbound_item", {

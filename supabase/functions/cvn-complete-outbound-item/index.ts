@@ -48,7 +48,22 @@ serve(async (req: Request) => {
   }
 
   const itemId = body.item_id;
-  const workerId = body.worker_id || authWorker.allowed_worker_ids[0] || authWorker.key_id;
+  const requestedWorkerId = body.worker_id;
+  let workerId: string;
+  if (requestedWorkerId) {
+    if (authWorker.allowed_worker_ids.length > 0 && !authWorker.allowed_worker_ids.includes(requestedWorkerId)) {
+      return new Response(
+        JSON.stringify({
+          error: "worker_identity_unauthorized",
+          message: `Worker key is not authorized for worker_id '${requestedWorkerId}'`,
+        }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    workerId = requestedWorkerId;
+  } else {
+    workerId = authWorker.allowed_worker_ids[0] || authWorker.key_id;
+  }
   const leaseToken = body.lease_token;
   const payloadHash = body.payload_hash;
   const contentHash = body.content_hash;

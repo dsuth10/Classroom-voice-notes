@@ -4,6 +4,9 @@ export type AuthenticatedWorker = {
   key_id: string;
   allowed_targets: string[];
   allowed_worker_ids: string[];
+  allowed_kinds: string[];
+  max_visibility_timeout: number;
+  batch_limit: number;
   legacy: boolean;
 };
 
@@ -75,7 +78,6 @@ export async function authenticateWorker(
       throw new AuthenticationError("Legacy authentication disabled");
     }
 
-    // Hash bearers before timing-safe equal
     const providedHash = await sha256Hex(providedBearer);
     const legacyHash = await sha256Hex(legacyBearer);
 
@@ -83,8 +85,15 @@ export async function authenticateWorker(
       throw new AuthenticationError("Invalid legacy bearer");
     }
 
-    const expectedSig = await hmacSha256Hex(rawBodyOrCanonicalString, legacyHmac);
-    if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
+    const url = new URL(req.url);
+    const fullCanonical = `${req.method.toUpperCase()}|${url.pathname}|${rawBodyOrCanonicalString}`;
+    const expectedSigFull = await hmacSha256Hex(fullCanonical, legacyHmac);
+    const expectedSigBody = await hmacSha256Hex(rawBodyOrCanonicalString, legacyHmac);
+
+    if (
+      !timingSafeEqual(signature.toLowerCase(), expectedSigFull.toLowerCase()) &&
+      !timingSafeEqual(signature.toLowerCase(), expectedSigBody.toLowerCase())
+    ) {
       throw new AuthenticationError("Invalid legacy signature");
     }
 
@@ -93,8 +102,11 @@ export async function authenticateWorker(
     return {
       key_id: "legacy-hermes-key",
       allowed_targets: ["hermes"],
-      allowed_worker_ids: [], // empty implies no strict check, or we can check later
-      legacy: true
+      allowed_worker_ids: [],
+      allowed_kinds: ["record_only", "agent_task"],
+      max_visibility_timeout: 300,
+      batch_limit: 1,
+      legacy: true,
     };
   }
 
@@ -128,7 +140,6 @@ export async function authenticateWorker(
     throw new AuthenticationError("Unknown key ID");
   }
 
-  // Strict validation of the entry
   if (keyConfig.enabled !== true) {
     throw new AuthenticationError("Key disabled");
   }
@@ -144,15 +155,22 @@ export async function authenticateWorker(
     throw new AuthenticationError("Invalid key configuration in registry");
   }
 
-  // Validate fields for unknown properties (fail closed)
-  const allowedKeys = ["enabled", "bearer_token", "hmac_secret", "allowed_targets", "allowed_worker_ids"];
+  const allowedKeys = [
+    "enabled",
+    "bearer_token",
+    "hmac_secret",
+    "allowed_targets",
+    "allowed_worker_ids",
+    "allowed_kinds",
+    "max_visibility_timeout",
+    "batch_limit",
+  ];
   for (const k of Object.keys(keyConfig)) {
     if (!allowedKeys.includes(k)) {
       throw new AuthenticationError("Registry entry contains unknown fields");
     }
   }
 
-  // Hash before timing safe equal
   const providedBearerHash = await sha256Hex(providedBearer);
   const expectedBearerHash = await sha256Hex(keyConfig.bearer_token);
 
@@ -162,8 +180,15 @@ export async function authenticateWorker(
     isAuthenticated = false;
   }
 
-  const expectedSig = await hmacSha256Hex(rawBodyOrCanonicalString, keyConfig.hmac_secret);
-  if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
+  const url = new URL(req.url);
+  const fullCanonical = `${req.method.toUpperCase()}|${url.pathname}|${rawBodyOrCanonicalString}`;
+  const expectedSigFull = await hmacSha256Hex(fullCanonical, keyConfig.hmac_secret);
+  const expectedSigBody = await hmacSha256Hex(rawBodyOrCanonicalString, keyConfig.hmac_secret);
+
+  if (
+    !timingSafeEqual(signature.toLowerCase(), expectedSigFull.toLowerCase()) &&
+    !timingSafeEqual(signature.toLowerCase(), expectedSigBody.toLowerCase())
+  ) {
     isAuthenticated = false;
   }
 
@@ -175,6 +200,9 @@ export async function authenticateWorker(
     key_id: keyId,
     allowed_targets: keyConfig.allowed_targets,
     allowed_worker_ids: keyConfig.allowed_worker_ids,
-    legacy: false
+    allowed_kinds: keyConfig.allowed_kinds || ["record_only", "agent_task"],
+    max_visibility_timeout: keyConfig.max_visibility_timeout || 300,
+    batch_limit: keyConfig.batch_limit || 1,
+    legacy: false,
   };
 }
