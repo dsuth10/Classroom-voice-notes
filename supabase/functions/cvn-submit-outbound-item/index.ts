@@ -143,9 +143,13 @@ serve(async (req: Request) => {
   }
 
   // 2. Server-Side Client Identity Authentication & Key Derivation
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
   let clientIdentity;
   try {
-    clientIdentity = await authenticateClient(req, bodyText);
+    clientIdentity = await authenticateClient(req, bodyText, supabase);
   } catch (authErr) {
     return new Response(
       JSON.stringify({

@@ -26,9 +26,10 @@ serve(async (req: Request) => {
   }
 
   const bodyText = await req.text();
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   let authWorker;
   try {
-    authWorker = await authenticateWorker(req, bodyText);
+    authWorker = await authenticateWorker(req, bodyText, supabase);
   } catch (authErr) {
     return new Response(
       JSON.stringify({

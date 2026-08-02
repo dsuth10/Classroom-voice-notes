@@ -116,9 +116,10 @@ serve(async (req: Request) => {
   }
 
   if (!isClient) {
-    // Attempt worker authentication (will fall back to legacy if no keyId)
+    // Attempt worker authentication
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
     try {
-      principal = await authenticateWorker(req, canonicalString);
+      principal = await authenticateWorker(req, canonicalString, supabase);
     } catch (e) {
       if (e instanceof AuthenticationError) {
         return new Response(e.message, { status: 401, headers: corsHeaders });

@@ -152,7 +152,7 @@ class ExternalAgentDispatcher:
             target_agent=target_agent,
         )
 
-        # 8. Generate 5-element HMAC request headers
+        # 8. Generate 5-element HMAC request headers with a fresh request authentication nonce
         from app.destinations.hmac_signer import create_client_request_headers
         client_key_id = self.settings_manager.get("external_agent.client_key_id") or os.environ.get("CVN_CLIENT_KEY_ID", "default_client_key")
         headers = create_client_request_headers(
@@ -162,7 +162,6 @@ class ExternalAgentDispatcher:
             bearer_token=bearer_token,
             hmac_secret=hmac_secret,
             client_key_id=client_key_id,
-            nonce=payload.get("nonce"),
         )
 
         self.outbox.mark_sending(local_id)
@@ -289,7 +288,6 @@ class ExternalAgentDispatcher:
                 bearer_token=bearer_token,
                 hmac_secret=hmac_secret,
                 client_key_id=client_key_id,
-                nonce=task.get("nonce"),
             )
             
             self.outbox.mark_sending(local_id)

@@ -1,4 +1,4 @@
-// supabase/functions/_shared/client_auth.ts
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 export type AuthenticatedClient = {
   key_id: string;
@@ -51,15 +51,6 @@ export async function sha256Hex(s: string): Promise<string> {
 }
 
 const MAX_TIMESTAMP_AGE_SECONDS = 300;
-const seenClientNonces = new Map<string, number>();
-
-function pruneClientNonces(nowSeconds: number) {
-  for (const [nonce, ts] of seenClientNonces.entries()) {
-    if (nowSeconds - ts > MAX_TIMESTAMP_AGE_SECONDS * 2) {
-      seenClientNonces.delete(nonce);
-    }
-  }
-}
 
 /**
  * Authenticates an incoming client request and derives its server-verified client_key_id.
@@ -68,6 +59,7 @@ function pruneClientNonces(nowSeconds: number) {
 export async function authenticateClient(
   req: Request,
   bodyText: string,
+  supabaseClient?: any,
 ): Promise<AuthenticatedClient> {
   const authHeader = req.headers.get("authorization") ?? "";
   const signature = req.headers.get("x-cvn-signature") ?? "";
@@ -98,7 +90,7 @@ export async function authenticateClient(
 
   const providedBearer = authHeader.slice(7);
 
-  // 1. Timestamp Freshness and Nonce Replay Check
+  // 1. Timestamp Freshness Check
   const nowSeconds = Math.floor(Date.now() / 1000);
   const reqTimestamp = parseInt(timestampStr, 10);
   if (
@@ -109,11 +101,6 @@ export async function authenticateClient(
   }
 
   const resolvedKeyId = keyIdHeader;
-  pruneClientNonces(nowSeconds);
-  const nonceKey = `${resolvedKeyId}:${nonce}`;
-  if (seenClientNonces.has(nonceKey)) {
-    throw new ClientAuthenticationError("Nonce already used");
-  }
 
   // 2. Registry-based Multi-Client Identity Path
   const registryJson = Deno.env.get("CVN_CLIENT_CREDENTIALS") ?? "";
@@ -161,7 +148,29 @@ export async function authenticateClient(
       throw new ClientAuthenticationError("Invalid signature");
     }
 
-    seenClientNonces.set(nonceKey, nowSeconds);
+    // 3. Atomic Database Nonce Replay Protection Registration
+    const sbUrl = Deno.env.get("SUPABASE_URL");
+    const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const client =
+      supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
+
+    if (client) {
+      const { data: registered, error } = await client.rpc(
+        "cvn_register_request_nonce",
+        {
+          p_credential_type: "client",
+          p_key_id: resolvedKeyId,
+          p_nonce: nonce,
+          p_timestamp: reqTimestamp,
+          p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
+        },
+      );
+      if (error || registered !== true) {
+        throw new ClientAuthenticationError(
+          "Nonce already used or timestamp expired",
+        );
+      }
+    }
 
     return {
       key_id: resolvedKeyId,
@@ -170,7 +179,7 @@ export async function authenticateClient(
     };
   }
 
-  // 3. Single-Client Environment Credential Fallback Path
+  // 4. Single-Client Environment Credential Fallback Path
   const envBearer = Deno.env.get("CVN_BEARER_TOKEN") ?? "";
   const envHmac = Deno.env.get("CVN_HMAC_SECRET") ?? "";
 
@@ -194,7 +203,29 @@ export async function authenticateClient(
     throw new ClientAuthenticationError("Invalid signature");
   }
 
-  seenClientNonces.set(nonceKey, nowSeconds);
+  // Atomic Database Nonce Replay Protection Registration
+  const sbUrl = Deno.env.get("SUPABASE_URL");
+  const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const client =
+    supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
+
+  if (client) {
+    const { data: registered, error } = await client.rpc(
+      "cvn_register_request_nonce",
+      {
+        p_credential_type: "client",
+        p_key_id: resolvedKeyId,
+        p_nonce: nonce,
+        p_timestamp: reqTimestamp,
+        p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
+      },
+    );
+    if (error || registered !== true) {
+      throw new ClientAuthenticationError(
+        "Nonce already used or timestamp expired",
+      );
+    }
+  }
 
   return {
     key_id: resolvedKeyId,

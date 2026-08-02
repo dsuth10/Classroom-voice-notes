@@ -68,9 +68,10 @@ serve(async (req: Request) => {
   }
 
   // Authenticate before parsing business fields
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   let principal;
   try {
-    principal = await authenticateWorker(req, body);
+    principal = await authenticateWorker(req, body, supabase);
   } catch (e) {
     if (e instanceof AuthenticationError) {
       return new Response(e.message, { status: 401, headers: corsHeaders });

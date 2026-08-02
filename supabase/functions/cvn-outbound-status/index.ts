@@ -27,8 +27,9 @@ serve(async (req: Request) => {
     text = "";
   }
 
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   try {
-    await authenticateWorker(req, text);
+    await authenticateWorker(req, text, supabase);
   } catch (err) {
     if (err instanceof AuthenticationError) {
       return new Response(

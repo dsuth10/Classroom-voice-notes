@@ -1,6 +1,7 @@
 // supabase/functions/cvn-submit-task/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateClient } from "../_shared/client_auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -143,25 +144,20 @@ serve(async (req: Request) => {
     });
   }
 
-  // 1. Bearer token
-  const auth = req.headers.get("authorization") ?? "";
-  if (
-    !auth.startsWith("Bearer ") ||
-    !timingSafeEqual(auth.slice(7), BEARER_TOKEN)
-  ) {
-    return new Response("Unauthorized", { status: 401, headers: corsHeaders });
-  }
-
   const body = await req.text();
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-  // 2. HMAC verify
-  const signature = req.headers.get("x-cvn-signature") ?? "";
-  const expected = await hmacSha256Hex(body, HMAC_SECRET);
-  if (!signature || !timingSafeEqual(signature.toLowerCase(), expected)) {
-    return new Response("Invalid signature", {
-      status: 401,
-      headers: corsHeaders,
-    });
+  // 1. Strict 5-Element Client Authentication & Atomic DB Nonce Registration
+  try {
+    await authenticateClient(req, body, supabase);
+  } catch (err: any) {
+    return new Response(
+      JSON.stringify({ error: err.message || "Unauthorized" }),
+      {
+        status: 401,
+        headers: { ...corsHeaders, "content-type": "application/json" },
+      },
+    );
   }
 
   // 3. Parse JSON

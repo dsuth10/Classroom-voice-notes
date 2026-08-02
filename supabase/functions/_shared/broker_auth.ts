@@ -1,4 +1,4 @@
-// supabase/functions/_shared/broker_auth.ts
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 export type AuthenticatedWorker = {
   key_id: string;
@@ -20,17 +20,6 @@ export class AuthenticationError extends Error {
 
 const MAX_REGISTRY_SIZE_BYTES = 10 * 1024; // 10KB max for credentials JSON
 const MAX_TIMESTAMP_AGE_SECONDS = 300; // 5 minutes freshness window
-
-// In-memory nonce cache with TTL for replay protection
-const seenNonces = new Map<string, number>();
-
-function pruneSeenNonces(nowSeconds: number) {
-  for (const [nonce, ts] of seenNonces.entries()) {
-    if (nowSeconds - ts > MAX_TIMESTAMP_AGE_SECONDS * 2) {
-      seenNonces.delete(nonce);
-    }
-  }
-}
 
 // Fast SHA-256 for mitigating length-extension/timing on bearer token
 export async function sha256Hex(s: string): Promise<string> {
@@ -73,6 +62,7 @@ export function timingSafeEqual(a: string, b: string): boolean {
 export async function authenticateWorker(
   req: Request,
   rawBodyOrCanonicalString: string,
+  supabaseClient?: any,
 ): Promise<AuthenticatedWorker> {
   const authHeader = req.headers.get("authorization") ?? "";
   const signature = req.headers.get("x-cvn-signature") ?? "";
@@ -106,16 +96,9 @@ export async function authenticateWorker(
     throw new AuthenticationError("Stale or invalid request timestamp");
   }
 
-  // 2. Nonce Replay Protection Check
-  pruneSeenNonces(nowSeconds);
-  const nonceKey = `${keyId}:${nonce}`;
-  if (seenNonces.has(nonceKey)) {
-    throw new AuthenticationError("Nonce already used");
-  }
-
   const providedBearer = authHeader.slice(7);
 
-  // 3. Multi-Worker Identity & Registry Validation
+  // 2. Multi-Worker Identity & Registry Validation
   if (keyId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(keyId)) {
     throw new AuthenticationError("Invalid key ID format");
   }
@@ -193,14 +176,14 @@ export async function authenticateWorker(
     }
   }
 
-  // 4. Bearer Hash Verification
+  // 3. Bearer Hash Verification
   const providedBearerHash = await sha256Hex(providedBearer);
   const expectedBearerHash = await sha256Hex(keyConfig.bearer_token);
   if (!timingSafeEqual(providedBearerHash, expectedBearerHash)) {
     throw new AuthenticationError("Invalid credentials");
   }
 
-  // 5. 5-Element Canonical HMAC Signature Verification: METHOD|PATH|TIMESTAMP|NONCE|BODY
+  // 4. 5-Element Canonical HMAC Signature Verification: METHOD|PATH|TIMESTAMP|NONCE|BODY
   const url = new URL(req.url);
   const canonicalString = `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${rawBodyOrCanonicalString}`;
   const expectedSig = await hmacSha256Hex(
@@ -212,8 +195,27 @@ export async function authenticateWorker(
     throw new AuthenticationError("Invalid signature");
   }
 
-  // Record nonce only after signature and credentials are fully verified
-  seenNonces.set(nonceKey, nowSeconds);
+  // 5. Atomic Database Nonce Replay Protection Registration
+  const sbUrl = Deno.env.get("SUPABASE_URL");
+  const sbKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const client =
+    supabaseClient || (sbUrl && sbKey ? createClient(sbUrl, sbKey) : null);
+
+  if (client) {
+    const { data: registered, error } = await client.rpc(
+      "cvn_register_request_nonce",
+      {
+        p_credential_type: "worker",
+        p_key_id: keyId,
+        p_nonce: nonce,
+        p_timestamp: reqTimestamp,
+        p_ttl_seconds: MAX_TIMESTAMP_AGE_SECONDS,
+      },
+    );
+    if (error || registered !== true) {
+      throw new AuthenticationError("Nonce already used or timestamp expired");
+    }
+  }
 
   return {
     key_id: keyId,
