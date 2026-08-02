@@ -92,16 +92,24 @@ class OutboundSubmissionService:
                 else []
             )
 
+            raw_classification = assessment_dict.get("automatic_classification")
+            automatic_classification: str = (
+                raw_classification if isinstance(raw_classification, str) and raw_classification else "non_sensitive"
+            )
+
+            raw_risk = assessment_dict.get("risk_level")
+            risk_level: str = (
+                raw_risk if isinstance(raw_risk, str) and raw_risk else "low"
+            )
+
             payload, payload_str, payload_hash = build_outbound_payload_v2(
                 item_id=item_id,
                 source_device_id=source_device_id,
                 item_kind=item_kind,
                 target_agent=target_agent,
                 content=content,
-                automatic_classification=assessment_dict.get(
-                    "automatic_classification", "non_sensitive"
-                ),
-                risk_level=assessment_dict.get("risk_level", "low"),
+                automatic_classification=automatic_classification,
+                risk_level=risk_level,
                 findings=findings_list,
                 release_basis=release_basis_value,
                 approval_metadata={
