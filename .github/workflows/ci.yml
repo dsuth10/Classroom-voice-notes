@@ -48,9 +48,9 @@ jobs:
         run: uv run --frozen mypy app
 
       - name: Install Deno
-        uses: denoland/setup-deno@34047466b09a473c090623a31c5040600a943729 # v2.0.2
+        uses: denoland/setup-deno@2c451677c770c0c667e42d7211116fa05d68805f # v2.0.2
         with:
-          deno-version: v2.x
+          deno-version: 1.46.3
 
       - name: Check TypeScript formatting
         run: deno fmt --check supabase/functions/

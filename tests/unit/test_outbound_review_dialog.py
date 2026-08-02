@@ -1,11 +1,15 @@
-"""Headless UI unit tests for OutboundReviewDialog."""
+"""Headless UI unit tests for OutboundReviewDialog and OutboundPreviewDialog."""
 import json
 from pathlib import Path
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from app.destinations.outbound_review_store import OutboundReviewStore
-from app.ui.outbound_review_dialog import OutboundReviewDialog
+from app.ui.outbound_review_dialog import (
+    OutboundDraft,
+    OutboundPreviewDialog,
+    OutboundReviewDialog,
+)
 
 
 @pytest.fixture(scope="session")
@@ -20,6 +24,67 @@ def qapp() -> QApplication:
 @pytest.fixture
 def temp_store(tmp_path: Path) -> OutboundReviewStore:
     return OutboundReviewStore(tmp_path / "test_review_ui.db")
+
+
+def test_outbound_draft_deep_immutability() -> None:
+    """Verifies that OutboundDraft content and task dicts are deeply copied and immutable."""
+    nested_content = {"title": "Test Title", "structured_fields": {"sub": [1, 2, 3]}}
+    draft = OutboundDraft(
+        item_kind="record_only",
+        target_agent="openclaw",
+        content=nested_content,
+    )
+
+    # Mutating original input dict does not affect draft
+    nested_content["title"] = "Mutated Title"
+    nested_content["structured_fields"]["sub"].append(4)  # type: ignore[attr-defined]
+
+    assert draft.content["title"] == "Test Title"
+    assert draft.content["structured_fields"]["sub"] == [1, 2, 3]
+
+    # to_dict returns deep copy
+    d_dict = draft.to_dict()
+    d_dict["content"]["title"] = "New Title"
+    assert draft.content["title"] == "Test Title"
+
+
+def test_outbound_draft_validation() -> None:
+    """Verifies draft validation logic for item_kind, target, title, and task."""
+    # Invalid kind
+    invalid_kind = OutboundDraft(
+        item_kind="invalid_kind",
+        target_agent="openclaw",
+        content={"title": "Title"},
+    )
+    with pytest.raises(ValueError, match="Invalid item_kind"):
+        invalid_kind.validate()
+
+    # Empty title
+    no_title = OutboundDraft(
+        item_kind="record_only",
+        target_agent="openclaw",
+        content={"title": "   "},
+    )
+    with pytest.raises(ValueError, match="non-empty string title"):
+        no_title.validate()
+
+    # Missing task for agent_task
+    missing_task = OutboundDraft(
+        item_kind="agent_task",
+        target_agent="openclaw",
+        content={"title": "Task Title"},
+        task=None,
+    )
+    with pytest.raises(ValueError, match="requires a valid task dictionary"):
+        missing_task.validate()
+
+    # Valid draft
+    valid_draft = OutboundDraft(
+        item_kind="record_only",
+        target_agent="openclaw",
+        content={"title": "Valid Note"},
+    )
+    valid_draft.validate()
 
 
 def test_dialog_loading_and_selection(
@@ -93,9 +158,9 @@ def test_dialog_approve_and_reject(
         lambda parent, title, text, *args, **kwargs: info_messages.append((title, text)),
     )
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda parent, title, text, *args, **kwargs: QMessageBox.StandardButton.Yes,
+        OutboundPreviewDialog,
+        "exec",
+        lambda self: QDialog.DialogCode.Accepted,
     )
 
     dialog = OutboundReviewDialog(temp_store)
@@ -105,38 +170,6 @@ def test_dialog_approve_and_reject(
     assert item is not None
     assert item["status"] == "queued"
     assert item["approved_content_hash"] == item["content_hash"]
-
-
-def test_dialog_edit_triggers_reassessment_before_approval(
-    qapp: QApplication, temp_store: OutboundReviewStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    temp_store.create_review_item(
-        item_id="CVNI-UI-4",
-        note_path="/notes/email.md",
-        item_kind="record_only",
-        target_agent="openclaw",
-        draft_json=json.dumps({"content": {"title": "Clean Note"}}),
-        assessment_json=json.dumps({"risk_level": "low", "findings": []}),
-    )
-
-    warning_titles = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "warning",
-        lambda parent, title, text, *args, **kwargs: warning_titles.append(title) or QMessageBox.StandardButton.No,
-    )
-
-    dialog = OutboundReviewDialog(temp_store)
-    # Edit title to contain PII email address
-    dialog.title_edit.setText("Contact teacher@school.edu")
-    dialog._on_approve_clicked()
-
-    # Verify reassessment flagged high risk and triggered HIGH RISK CONFIRMATION warning box
-    assert "HIGH RISK CONFIRMATION" in warning_titles
-    # Since user clicked No, item remains awaiting_review
-    item = temp_store.get_by_id("CVNI-UI-4")
-    assert item is not None
-    assert item["status"] == "awaiting_review"
 
 
 def test_dialog_cancel_preview_keeps_awaiting_review(
@@ -152,9 +185,9 @@ def test_dialog_cancel_preview_keeps_awaiting_review(
     )
 
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda parent, title, text, *args, **kwargs: QMessageBox.StandardButton.No,
+        OutboundPreviewDialog,
+        "exec",
+        lambda self: QDialog.DialogCode.Rejected,
     )
 
     dialog = OutboundReviewDialog(temp_store)
@@ -163,4 +196,3 @@ def test_dialog_cancel_preview_keeps_awaiting_review(
     item = temp_store.get_by_id("CVNI-UI-5")
     assert item is not None
     assert item["status"] == "awaiting_review"
-

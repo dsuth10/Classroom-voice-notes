@@ -2,10 +2,11 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { computeCanonicalHash, isValidHexSha256 } from "../_shared/outbound_contract.ts";
+import { authenticateClient, ClientAuthenticationError } from "../_shared/client_auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, x-cvn-client-key-id, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -13,34 +14,8 @@ const SCHEMA_VERSION = "cvn.outbound_item.v2";
 const STALE_TIMESTAMP_SECONDS = 300; // 5 min
 const MAX_BODY_SIZE_BYTES = 512 * 1024; // 512 KB
 
-const HMAC_SECRET = Deno.env.get("CVN_HMAC_SECRET") ?? "";
-const BEARER_TOKEN = Deno.env.get("CVN_BEARER_TOKEN") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
-}
-
-async function hmacSha256Hex(body: string, secret: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-  return Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 async function sha256Hex(s: string): Promise<string> {
   const buf = await crypto.subtle.digest(
@@ -138,17 +113,7 @@ serve(async (req: Request) => {
     });
   }
 
-  // 1. Auth header check
-  const authHeader = req.headers.get("authorization") ?? "";
-  const expectedAuth = `Bearer ${BEARER_TOKEN}`;
-  if (!BEARER_TOKEN || !timingSafeEqual(authHeader, expectedAuth)) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
-  // 2. Read body & check max size limit
+  // 1. Read body & check max size limit
   const bodyText = await req.text();
   const bodyBytes = new TextEncoder().encode(bodyText).length;
   if (bodyBytes > MAX_BODY_SIZE_BYTES) {
@@ -158,18 +123,24 @@ serve(async (req: Request) => {
     });
   }
 
-  // 3. HMAC signature check
-  const signatureHeader = req.headers.get("x-cvn-signature") ?? "";
-  const computedSignature = await hmacSha256Hex(bodyText, HMAC_SECRET);
-
-  if (!HMAC_SECRET || !timingSafeEqual(signatureHeader, computedSignature)) {
-    return new Response(JSON.stringify({ error: "invalid_signature" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+  // 2. Server-Side Client Identity Authentication & Key Derivation
+  let clientIdentity;
+  try {
+    clientIdentity = await authenticateClient(req, bodyText);
+  } catch (authErr) {
+    return new Response(
+      JSON.stringify({
+        error: "unauthorized",
+        message: authErr instanceof ClientAuthenticationError ? authErr.message : "Client authentication failed",
+      }),
+      {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   }
 
-  // 4. Parse JSON & Validate Schema
+  // 3. Parse JSON & Validate Schema
   let payload: any;
   try {
     payload = JSON.parse(bodyText);
@@ -191,7 +162,7 @@ serve(async (req: Request) => {
     );
   }
 
-  // 5. Recompute canonical content hash server-side and verify match
+  // 4. Recompute canonical content hash server-side and verify match
   const serverCanonicalHash = await computeCanonicalHash(
     payload.item_kind,
     payload.target_agent,
@@ -228,7 +199,7 @@ serve(async (req: Request) => {
     }
   }
 
-  // 6. Stale timestamp check
+  // 5. Stale timestamp check
   const signedAtMs = Date.parse(payload.signed_at);
   const nowMs = Date.now();
   if (
@@ -241,26 +212,26 @@ serve(async (req: Request) => {
     });
   }
 
-  // 7. Initialize Supabase Service Role Client
+  // 6. Initialize Supabase Service Role Client
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-  // 8. Server-Authorized Trusted Mode Capability Evaluation
+  // 7. Server-Authorized Trusted Mode Capability Evaluation
   if (payload.privacy?.release_basis === "trusted_mode") {
-    const clientKeyId =
-      req.headers.get("x-cvn-client-key-id") ||
-      payload.client_key_id ||
-      "default_client_key";
-    const environment = Deno.env.get("CVN_ENVIRONMENT") || "staging";
+    // DERIVE client_key_id FROM AUTHENTICATED SERVER IDENTITY — ignore/override caller spoofing
+    const serverClientKeyId = clientIdentity.key_id;
+    const environment = clientIdentity.environment;
+    const policyVersion = payload.privacy?.policy_gate_version ?? "2.0.0";
 
     const { data: entResult, error: entErr } = await supabase.rpc(
       "cvn_evaluate_trusted_entitlement",
       {
-        p_client_key_id: clientKeyId,
+        p_client_key_id: serverClientKeyId,
         p_source_device_id: payload.source_device_id,
         p_environment: environment,
         p_item_kind: payload.item_kind,
         p_target_agent: payload.target_agent,
         p_risk_level: payload.privacy?.risk_level ?? "low",
+        p_policy_version: policyVersion,
       },
     );
 
@@ -269,10 +240,7 @@ serve(async (req: Request) => {
         JSON.stringify({
           error: "trusted_mode_unauthorized",
           reason_code: entResult?.reason_code ?? "entitlement_check_failed",
-          message:
-            entResult?.error_message ??
-            entErr?.message ??
-            "Trusted mode entitlement check failed",
+          message: entResult?.error_message ?? "Trusted mode entitlement check failed",
         }),
         {
           status: 403,
@@ -282,11 +250,10 @@ serve(async (req: Request) => {
     }
   }
 
-  // 9. Invoke Supabase Submission RPC
+  // 8. Invoke Supabase Submission RPC
   const payloadHash = await sha256Hex(bodyText);
 
   const { data, error } = await supabase.rpc("cvn_submit_outbound_item", {
-
     p_item_id: payload.item_id,
     p_source_device_id: payload.source_device_id,
     p_item_kind: payload.item_kind,

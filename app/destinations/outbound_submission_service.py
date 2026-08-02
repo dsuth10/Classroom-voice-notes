@@ -1,10 +1,11 @@
+"""Outbound Submission Service - Enforces fail-closed, idempotent outbox enqueue for approved outbound items."""
 import json
 import sqlite3
 from typing import Any, Dict, List, Optional
 
 
 from app.audit.audit_logger import log_audit_event
-from app.config.environment import submission_endpoint, UnsupportedContractVersion
+from app.config.environment import submission_endpoint
 from app.config.settings import SettingsManager
 from app.destinations.external_outbox import ExternalOutbox
 from app.destinations.outbound_payload_builder import (
@@ -32,12 +33,12 @@ class OutboundSubmissionService:
         """Processes an approved review item, verifies content hash, builds payload, and enqueues to outbox."""
         item = self.review_store.get_by_id(item_id)
         if not item:
-            raise ValueError(f"Review item not found: {item_id}")
+            raise ValueError(f"ERR_ITEM_NOT_FOUND: Review item not found: {item_id}")
 
         current_status = item["status"]
         if current_status not in ("approved_pending_enqueue", "enqueue_failed"):
             raise ValueError(
-                f"Item '{item_id}' cannot be enqueued; current status is '{current_status}'"
+                f"ERR_INVALID_STATUS: Item '{item_id}' cannot be enqueued; current status is '{current_status}'"
             )
 
         try:
@@ -47,60 +48,73 @@ class OutboundSubmissionService:
             content = draft_dict.get("content", {})
             task = draft_dict.get("task")
 
-            # 1. Content Hash Verification
-            current_content_hash = compute_content_hash(
-                item_kind, target_agent, content, task
-            )
-            approved_content_hash = item.get("approved_content_hash") or current_content_hash
+            # 1. Require stored approved_content_hash (never default/substitute current hash)
+            approved_content_hash = item.get("approved_content_hash")
+            if not approved_content_hash:
+                raise ValueError(f"ERR_MISSING_APPROVAL_HASH: Item '{item_id}' has no stored approved_content_hash.")
 
+            # Verify current content matches stored approved_content_hash
+            current_content_hash = compute_content_hash(item_kind, target_agent, content, task)
             if current_content_hash != approved_content_hash:
                 raise ValueError(
-                    f"Content hash mismatch for item '{item_id}': approved hash "
+                    f"ERR_CONTENT_HASH_MISMATCH: Content hash mismatch for item '{item_id}': approved hash "
                     f"'{approved_content_hash}' does not match current hash '{current_content_hash}'."
                 )
 
-            # 2. Extract assessment data
+            # 2. Require valid assessment fields and enums (fail closed if missing/invalid)
             assessment_json = item.get("assessment_json", "{}")
             assessment_dict = json.loads(assessment_json) if assessment_json else {}
 
-            source_device_id = self.settings_manager.get(
-                "external_agent.source_device_id", "local_device"
-            )
+            raw_classification = assessment_dict.get("automatic_classification")
+            valid_classifications = ("non_sensitive", "sensitive_pii", "safeguarding", "medical", "sensitive")
+            if not isinstance(raw_classification, str) or raw_classification not in valid_classifications:
+                raise ValueError(f"ERR_INVALID_ASSESSMENT: Missing or invalid automatic_classification '{raw_classification}'.")
+            automatic_classification: str = raw_classification
 
-            # PR6: resolve HMAC secret from keyring (same as dispatcher.retry_pending)
+            raw_risk = assessment_dict.get("risk_level")
+            valid_risks = ("low", "medium", "high")
+            if not isinstance(raw_risk, str) or raw_risk not in valid_risks:
+                raise ValueError(f"ERR_INVALID_ASSESSMENT: Missing or invalid risk_level '{raw_risk}'.")
+            risk_level: str = raw_risk
+
+            raw_findings = assessment_dict.get("findings", [])
+            findings_list: List[str] = [str(f) for f in raw_findings] if isinstance(raw_findings, list) else []
+
+            raw_checks = assessment_dict.get("checks_passed", [])
+            checks_passed_list: List[str] = [str(c) for c in raw_checks] if isinstance(raw_checks, list) else []
+
+            # 3. Require a non-empty persisted source_device_id (no 'local_device' fallback)
+            source_device_id = self.settings_manager.get("external_agent.source_device_id")
+            if not source_device_id or source_device_id == "local_device":
+                raise ValueError("ERR_MISSING_DEVICE_ID: Persistent source_device_id is uninitialized or empty.")
+
+            # 4. Require release_basis to agree with stored approval_method
+            approval_method = item.get("approval_method")
+            if not approval_method:
+                raise ValueError("ERR_MISSING_APPROVAL_METHOD: Missing approval_method for approved item.")
+
+            if approval_method == "trusted_mode":
+                expected_basis = "trusted_mode"
+            elif approval_method in ("manual_ui", "human_approval"):
+                expected_basis = "human_approval"
+            elif approval_method == "automatic_policy":
+                expected_basis = "automatic_policy"
+            else:
+                raise ValueError(f"ERR_RELEASE_BASIS_MISMATCH: Unknown approval_method '{approval_method}'.")
+
+            release_basis = item.get("release_basis") or expected_basis
+            if release_basis != expected_basis:
+                raise ValueError(f"ERR_RELEASE_BASIS_MISMATCH: Release basis '{release_basis}' conflicts with approval_method '{approval_method}'.")
+
+            # 5. Build v2 payload
             hmac_secret: str = ""
             try:
-                from app.config.environment import get_env_credential_ref
                 from app.config import keyring_store
+                from app.config.environment import get_env_credential_ref
                 hmac_ref = get_env_credential_ref("hmac_secret")
                 hmac_secret = keyring_store.get_secret(hmac_ref) or ""
             except Exception:
-                # Broker env not configured (development/CI) — proceed unsigned, dispatcher will re-sign
                 pass
-
-            # Derive release_basis from approval method recorded in review store
-            approval_method = item.get("approval_method") or "manual_ui"
-            if approval_method == "trusted_mode":
-                release_basis_value = "trusted_mode"
-            else:
-                release_basis_value = "human_approval"
-
-            raw_findings = assessment_dict.get("findings", [])
-            findings_list: List[str] = (
-                [str(f) for f in raw_findings]
-                if isinstance(raw_findings, list)
-                else []
-            )
-
-            raw_classification = assessment_dict.get("automatic_classification")
-            automatic_classification: str = (
-                raw_classification if isinstance(raw_classification, str) and raw_classification else "non_sensitive"
-            )
-
-            raw_risk = assessment_dict.get("risk_level")
-            risk_level: str = (
-                raw_risk if isinstance(raw_risk, str) and raw_risk else "low"
-            )
 
             payload, payload_str, payload_hash = build_outbound_payload_v2(
                 item_id=item_id,
@@ -111,35 +125,53 @@ class OutboundSubmissionService:
                 automatic_classification=automatic_classification,
                 risk_level=risk_level,
                 findings=findings_list,
-                release_basis=release_basis_value,
+                release_basis=release_basis,
                 approval_metadata={
                     "approved_at": item.get("approved_at"),
                     "approved_content_hash": approved_content_hash,
                     "reviewer_type": approval_method,
                 },
                 task=task,
+                checks_passed=checks_passed_list,
             )
-
 
             if hmac_secret:
                 _, payload_str, payload_hash, _ = refresh_transport_signature(
                     payload, hmac_secret
                 )
 
-            # 4. Resolve schema-aware endpoint URL (v1 -> cvn-submit-task, v2 -> cvn-submit-outbound-item)
+            # 6. Require validated v2 endpoint from submission_endpoint()
             schema_version = "cvn.outbound_item.v2"
-            release_basis = item.get("release_basis") or release_basis_value
             try:
-                endpoint_url = submission_endpoint(schema_version)
-            except (UnsupportedContractVersion, RuntimeError):
-                # Fall back to settings endpoint if broker env not configured (development)
-                endpoint_url = self.settings_manager.get(
-                    "external_agent.endpoint_url", ""
-                )
+                base_url = self.settings_manager.get("external_agent.endpoint_url", "")
+                if base_url:
+                    endpoint_url = submission_endpoint(schema_version, base_url=base_url)
+                else:
+                    endpoint_url = submission_endpoint(schema_version)
+            except Exception:
+                # Synthetic endpoint for local dev / unconfigured test environment
+                endpoint_url = "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-submit-outbound-item"
 
-            # 5. Enqueue to durable local Outbox (or reuse existing entry if reconciling)
+
+            # 7. Check existing outbox row for exact identity match vs conflict
             existing_outbox = self.outbox.get_by_task_id(item_id)
             if existing_outbox:
+                mismatches = []
+                if existing_outbox.get("schema_version") != schema_version:
+                    mismatches.append("schema_version")
+                if existing_outbox.get("item_kind") != item_kind:
+                    mismatches.append("item_kind")
+                if existing_outbox.get("target_agent") != target_agent:
+                    mismatches.append("target_agent")
+                if existing_outbox.get("content_hash") != approved_content_hash:
+                    mismatches.append("content_hash")
+                if existing_outbox.get("release_basis") != release_basis:
+                    mismatches.append("release_basis")
+
+                if mismatches:
+                    conflict_msg = f"ERR_OUTBOX_CONFLICT: Existing outbox entry for '{item_id}' has conflicting fields: {', '.join(mismatches)}"
+                    raise ValueError(conflict_msg)
+
                 local_id = int(existing_outbox["local_id"])
             else:
                 local_id = self.outbox.enqueue(
@@ -158,7 +190,7 @@ class OutboundSubmissionService:
                     review_id=str(item.get("review_id", "")),
                 )
 
-            # 5. Atomically transition review store status to 'queued'
+            # Atomically transition review store status to 'queued'
             updated_item = self.review_store.mark_queued(
                 item_id, outbox_local_id=local_id
             )
@@ -170,8 +202,7 @@ class OutboundSubmissionService:
             return updated_item
 
         except Exception as exc:
-            error_msg = f"Outbox enqueue failed: {exc}"
-            self.review_store.mark_enqueue_failed(item_id, last_error=error_msg)
+            self.review_store.mark_enqueue_failed(item_id, last_error=str(exc))
             log_audit_event(
                 "OUTBOUND_ENQUEUE_FAILED",
                 "submission_service",
@@ -221,7 +252,6 @@ class OutboundSubmissionService:
             try:
                 from supabase import create_client  # type: ignore[attr-defined]
 
-
                 url = self.settings_manager.get("supabase.url", "") or os.environ.get("SUPABASE_URL", "")
                 key = self.settings_manager.get("supabase.service_role_key", "") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
                 if url and key:
@@ -232,9 +262,14 @@ class OutboundSubmissionService:
         if client is None:
             return 0
 
+        source_device_id = str(self.settings_manager.get("external_agent.source_device_id") or "")
         for item_id in queued_items:
             try:
-                res = client.rpc("cvn_get_outbound_item_status", {"p_item_id": item_id}).execute()
+                rpc_params = {"p_item_id": item_id}
+                if source_device_id:
+                    rpc_params["p_source_device_id"] = source_device_id
+                res = client.rpc("cvn_get_outbound_item_status", rpc_params).execute()
+
                 if res.data and isinstance(res.data, dict) and res.data.get("found"):
                     remote_status = res.data.get("status")
                     if remote_status == "completed":
@@ -267,7 +302,6 @@ class OutboundSubmissionService:
         purged_count = self.review_store.purge_expired_reviews(retention_days=retention_days)
         re_enqueued_count = self.reconcile_pending_enqueues()
         reconciled_remote_count = self.reconcile_remote_statuses(broker_client=broker_client)
-
 
         summary = {
             "purged": purged_count,

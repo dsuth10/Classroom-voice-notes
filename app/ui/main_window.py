@@ -569,9 +569,10 @@ class MainWindow(QMainWindow):
         from app.destinations.outbound_review_store import OutboundReviewStore
         from app.ui.outbound_review_dialog import OutboundReviewDialog
         store = OutboundReviewStore()
-        dialog = OutboundReviewDialog(store, self)
+        dialog = OutboundReviewDialog(store, settings_manager=self.settings_manager, parent=self)
         dialog.exec()
         self.update_review_queue_button_label()
+
 
     def update_review_queue_button_label(self) -> None:
         """Updates the pending count badge on the Review Queue button."""

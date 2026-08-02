@@ -51,7 +51,7 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "hmac_secret_ref": "cvn_hmac_secret",
         "bearer_token_ref": "cvn_bearer_token",
         "target_agent_default": "openclaw",
-        "source_device_id": "",
+        "source_device_id": "cvn-device-default",
         "allowed_target_agents": ["openclaw"],
         "allowed_endpoint_domains": ["supabase.co"],
         "policy_gate_version": "1.0.0",

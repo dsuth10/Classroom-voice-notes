@@ -261,8 +261,23 @@ class OutboundRoutingService:
                 assessment_json=json.dumps(assessment_dict),
                 status="awaiting_review",
             )
-            self.review_store.approve(item_id, approval_method="trusted_mode")
+
+            from app.destinations.canonical_json import compute_canonical_content_hash
+
+            _, c_hash = compute_canonical_content_hash(
+                default_kind, target_agent, draft_dict.get("content", {}), task
+            )
+
+            self.review_store.approve(
+                item_id,
+                approval_method="trusted_mode",
+                approved_content_hash=c_hash,
+            )
             self._update_note_frontmatter(note_path, item_id, "approved_pending_enqueue")
+
+
+            if not self.settings_manager.get("external_agent.source_device_id"):
+                self.settings_manager.set("external_agent.source_device_id", "cvn-device-local-default")
 
             # Enqueue via submission service — only report trusted_auto_queued when durable row exists
             try:
@@ -272,6 +287,7 @@ class OutboundRoutingService:
                     review_store=self.review_store,
                 )
                 submission_svc.submit_approved_item(item_id)
+
                 log_audit_event(
                     "OUTBOUND_TRUSTED_RELEASE",
                     "routing_service",

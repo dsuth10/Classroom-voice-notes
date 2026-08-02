@@ -21,25 +21,54 @@ export function buildCanonicalObject(
   };
 }
 
-export function recursiveSortObject(obj: unknown): unknown {
-  if (obj === null || typeof obj !== "object") {
-    return obj;
+export function validateJsonDomain(val: unknown): void {
+  if (val === null || typeof val === "boolean" || typeof val === "string") {
+    return;
   }
-  if (Array.isArray(obj)) {
-    return obj.map(recursiveSortObject);
+  if (typeof val === "number") {
+    if (!Number.isFinite(val)) {
+      throw new Error(`Non-finite number ${val} is outside the RFC 8785 JSON domain.`);
+    }
+    return;
   }
-  const sortedKeys = Object.keys(obj as Record<string, unknown>).sort();
-  const result: Record<string, unknown> = {};
-  for (const key of sortedKeys) {
-    result[key] = recursiveSortObject((obj as Record<string, unknown>)[key]);
+  if (Array.isArray(val)) {
+    for (const item of val) {
+      validateJsonDomain(item);
+    }
+    return;
   }
-  return result;
+  if (typeof val === "object") {
+    for (const key of Object.keys(val as Record<string, unknown>)) {
+      if (typeof key !== "string") {
+        throw new TypeError(`Object key ${String(key)} is not a string.`);
+      }
+      validateJsonDomain((val as Record<string, unknown>)[key]);
+    }
+    return;
+  }
+  throw new TypeError(`Value of type ${typeof val} is outside the RFC 8785 JSON domain.`);
 }
 
 export function toCanonicalJson(obj: unknown): string {
-  const sorted = recursiveSortObject(obj);
-  return JSON.stringify(sorted);
+  validateJsonDomain(obj);
+  if (obj === null || typeof obj !== "object") {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    const items = obj.map((item) => toCanonicalJson(item));
+    return `[${items.join(",")}]`;
+  }
+  const keys = Object.keys(obj as Record<string, unknown>).sort();
+  const entries: string[] = [];
+  for (const key of keys) {
+    const val = (obj as Record<string, unknown>)[key];
+    if (val !== undefined) {
+      entries.push(`${JSON.stringify(key)}:${toCanonicalJson(val)}`);
+    }
+  }
+  return `{${entries.join(",")}}`;
 }
+
 
 export async function computeCanonicalHash(
   itemKind: string,

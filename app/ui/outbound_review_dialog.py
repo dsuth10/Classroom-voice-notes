@@ -1,8 +1,11 @@
 """Outbound Review Dialog - PySide6 UI for reviewing and approving outbound items."""
+import copy
 import json
 import os
+import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from PySide6.QtCore import Qt
@@ -17,34 +20,187 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from app.config.settings import SettingsManager
+from app.destinations.canonical_json import compute_canonical_content_hash
 from app.destinations.outbound_review_store import OutboundReviewStore
-
-
-from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class OutboundDraft:
-    """Immutable representation of editable outbound draft fields."""
+    """Deeply immutable representation of editable outbound draft fields."""
 
     item_kind: str
     target_agent: str
     content: Dict[str, Any]
     task: Optional[Dict[str, Any]] = None
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "content", copy.deepcopy(self.content or {}))
+        object.__setattr__(
+            self,
+            "task",
+            copy.deepcopy(self.task) if self.task is not None else None,
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "item_kind": self.item_kind,
             "target_agent": self.target_agent,
-            "content": self.content,
-            "task": self.task,
+            "content": copy.deepcopy(self.content),
+            "task": copy.deepcopy(self.task) if self.task is not None else None,
         }
+
+    def validate(self) -> None:
+        """Explicit validation for item kind, target, content, task, and size limits."""
+        if self.item_kind not in ("record_only", "agent_task"):
+            raise ValueError(
+                f"Invalid item_kind '{self.item_kind}'. Must be 'record_only' or 'agent_task'."
+            )
+
+        if self.target_agent not in ("openclaw", ""):
+            raise ValueError(
+                f"Unpermitted target_agent '{self.target_agent}'. Must be 'openclaw'."
+            )
+
+        if not isinstance(self.content, dict) or not str(self.content.get("title", "")).strip():
+            raise ValueError("Draft content must contain a non-empty string title.")
+
+        if self.item_kind == "agent_task":
+            if not isinstance(self.task, dict):
+                raise ValueError("agent_task draft requires a valid task dictionary.")
+            if not str(self.task.get("instructions", "")).strip():
+                raise ValueError("agent_task draft requires non-empty agent instructions.")
+        elif self.item_kind == "record_only":
+            if self.task and len(self.task) > 0:
+                raise ValueError("record_only draft must not contain task instructions.")
+
+        serialized = json.dumps(self.to_dict())
+        if len(serialized.encode("utf-8")) > 524288:
+            raise ValueError("Draft payload exceeds maximum allowed size limit of 512 KB.")
+
+
+class OutboundPreviewDialog(QDialog):
+    """Scrollable, read-only confirmation modal displaying every outbound field prior to approval."""
+
+    def __init__(
+        self,
+        item_id: str,
+        draft: OutboundDraft,
+        assessment: Any,
+        metadata: Dict[str, Any],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.item_id = item_id
+        self.draft = draft
+        self.assessment = assessment
+        self.metadata = metadata
+        self.init_ui()
+
+    def init_ui(self) -> None:
+        self.setWindowTitle(f"Final Outbound Preview — {self.item_id}")
+        self.resize(700, 550)
+
+        layout = QVBoxLayout(self)
+
+        risk = str(getattr(self.assessment, "risk_level", "low")).lower()
+        if risk == "high":
+            alert = QLabel("⚠️ HIGH RISK WARNING — EXTERNAL TRANSMISSION REVIEW")
+            alert.setStyleSheet(
+                "color: white; background-color: #c62828; padding: 8px; font-weight: bold; font-size: 13px;"
+            )
+            alert.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(alert)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_widget = QWidget()
+        form = QFormLayout(scroll_widget)
+
+        form.addRow("<b>Item ID:</b>", QLabel(self.item_id))
+        form.addRow("<b>Item Kind:</b>", QLabel(self.draft.item_kind))
+        form.addRow("<b>Target Agent:</b>", QLabel(self.draft.target_agent or "openclaw"))
+
+        content = self.draft.content
+        form.addRow("<b>Title:</b>", QLabel(str(content.get("title", "-"))))
+
+        summary_edit = QTextEdit()
+        summary_edit.setReadOnly(True)
+        summary_edit.setPlainText(str(content.get("summary", "-")))
+        summary_edit.setMaximumHeight(70)
+        form.addRow("<b>Summary:</b>", summary_edit)
+
+        transcript_val = content.get("transcript")
+        if transcript_val:
+            tr_edit = QTextEdit()
+            tr_edit.setReadOnly(True)
+            tr_edit.setPlainText(str(transcript_val))
+            tr_edit.setMaximumHeight(110)
+            form.addRow("<b>Transcript:</b>", tr_edit)
+        else:
+            form.addRow("<b>Transcript:</b>", QLabel("<i>Not included</i>"))
+
+        cat = content.get("category", "-")
+        tags_val = content.get("tags")
+        tags_str = ", ".join(tags_val) if isinstance(tags_val, list) else "-"
+        s_fields = json.dumps(content.get("structured_fields") or {}, indent=2)
+
+        form.addRow("<b>Category:</b>", QLabel(str(cat)))
+        form.addRow("<b>Tags:</b>", QLabel(tags_str))
+
+        sf_edit = QTextEdit()
+        sf_edit.setReadOnly(True)
+        sf_edit.setPlainText(s_fields)
+        sf_edit.setMaximumHeight(60)
+        form.addRow("<b>Structured Fields:</b>", sf_edit)
+
+        if self.draft.item_kind == "agent_task" and self.draft.task:
+            task_dict = self.draft.task
+            form.addRow("<b>Task Title:</b>", QLabel(str(task_dict.get("title", "-"))))
+            inst_edit = QTextEdit()
+            inst_edit.setReadOnly(True)
+            inst_edit.setPlainText(str(task_dict.get("instructions", "-")))
+            inst_edit.setMaximumHeight(80)
+            form.addRow("<b>Task Instructions:</b>", inst_edit)
+            form.addRow("<b>Task Priority:</b>", QLabel(str(task_dict.get("priority", "normal"))))
+
+        rec_at = self.metadata.get("created_at") or self.metadata.get("recorded_at") or "-"
+        dur = self.metadata.get("duration_seconds") or "-"
+        form.addRow("<b>Recorded Time:</b>", QLabel(str(rec_at)))
+        form.addRow("<b>Duration:</b>", QLabel(f"{dur} sec" if dur != "-" else "-"))
+
+        classification = getattr(self.assessment, "automatic_classification", "non_sensitive")
+        findings = getattr(self.assessment, "findings", [])
+        findings_str = ", ".join(findings) if findings else "None"
+
+        form.addRow("<b>Classification:</b>", QLabel(str(classification)))
+        form.addRow("<b>Risk Level:</b>", QLabel(risk.upper()))
+        form.addRow("<b>Privacy Findings:</b>", QLabel(findings_str))
+        form.addRow("<b>Release Basis:</b>", QLabel("human_approval"))
+
+        scroll.setWidget(scroll_widget)
+        layout.addWidget(scroll)
+
+        btn_layout = QHBoxLayout()
+        cancel_btn = QPushButton("Cancel / Keep Awaiting Review")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        confirm_btn = QPushButton("Confirm & Authorize Release")
+        confirm_btn.setStyleSheet(
+            "background-color: #2e7d32; color: white; font-weight: bold; padding: 6px;"
+        )
+        confirm_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(confirm_btn)
+
+        layout.addLayout(btn_layout)
 
 
 class OutboundReviewDialog(QDialog):
@@ -53,10 +209,12 @@ class OutboundReviewDialog(QDialog):
     def __init__(
         self,
         review_store: OutboundReviewStore,
+        settings_manager: Optional[SettingsManager] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.review_store = review_store
+        self.settings_manager = settings_manager
         self.current_item_id: Optional[str] = None
         self.items_data: Dict[str, Dict[str, Any]] = {}
         self.init_ui()
@@ -67,8 +225,6 @@ class OutboundReviewDialog(QDialog):
         self.resize(900, 600)
 
         main_layout = QVBoxLayout(self)
-
-        # Splitter for Left List & Right Detail View
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left Panel: List of Pending Items
@@ -139,9 +295,7 @@ class OutboundReviewDialog(QDialog):
         btn_layout = QHBoxLayout()
 
         self.apply_redactions_btn = QPushButton("Apply Suggested Redactions")
-        self.apply_redactions_btn.clicked.connect(
-            self._on_apply_redactions_clicked
-        )
+        self.apply_redactions_btn.clicked.connect(self._on_apply_redactions_clicked)
         btn_layout.addWidget(self.apply_redactions_btn)
 
         self.open_note_btn = QPushButton("Open Local Note")
@@ -256,9 +410,7 @@ class OutboundReviewDialog(QDialog):
         self.risk_label.setText(assessment.get("risk_level", "low").upper())
 
         findings = assessment.get("findings", [])
-        self.findings_label.setText(
-            ", ".join(findings) if findings else "None"
-        )
+        self.findings_label.setText(", ".join(findings) if findings else "None")
 
         content = draft.get("content", {})
         task = draft.get("task", {}) or {}
@@ -279,7 +431,7 @@ class OutboundReviewDialog(QDialog):
         self.note_path_label.setText(item.get("note_path", "-"))
 
     def _get_edited_draft(self) -> Optional[OutboundDraft]:
-        """Reads editable fields once into an immutable OutboundDraft value."""
+        """Reads editable fields once into a deeply immutable OutboundDraft value."""
         if not self.current_item_id or self.current_item_id not in self.items_data:
             return None
 
@@ -290,7 +442,7 @@ class OutboundReviewDialog(QDialog):
         except Exception:
             pass
 
-        content = existing_draft.get("content", {})
+        content = copy.deepcopy(existing_draft.get("content", {}))
         content["title"] = self.title_edit.text().strip()
         content["summary"] = self.summary_edit.toPlainText().strip()
 
@@ -309,12 +461,20 @@ class OutboundReviewDialog(QDialog):
                 "priority": "normal",
             }
 
-        return OutboundDraft(
+        draft = OutboundDraft(
             item_kind=item_kind,
             target_agent=target_agent,
             content=content,
             task=task,
         )
+
+        try:
+            draft.validate()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Draft", str(exc))
+            return None
+
+        return draft
 
     def _on_save_edits_clicked(self) -> None:
         if not self.current_item_id:
@@ -322,6 +482,11 @@ class OutboundReviewDialog(QDialog):
         draft = self._get_edited_draft()
         if not draft:
             return
+
+        vault_path = ""
+        if self.settings_manager:
+            vault_path = str(self.settings_manager.get("obsidian_vault_path") or "")
+
         from app.ollama_router.policy_gate import PolicyGate
 
         gate = PolicyGate()
@@ -331,6 +496,7 @@ class OutboundReviewDialog(QDialog):
                 target_agent=draft.target_agent,
                 content=draft.content,
                 task=draft.task,
+                vault_path=vault_path,
             )
         except Exception as exc:
             QMessageBox.warning(
@@ -363,7 +529,6 @@ class OutboundReviewDialog(QDialog):
     def _on_apply_redactions_clicked(self) -> None:
         if not self.current_item_id:
             return
-        import re
 
         email_pat = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
         phone_pat = re.compile(r"\b\d{8,15}\b")
@@ -420,7 +585,10 @@ class OutboundReviewDialog(QDialog):
         if not draft:
             return
 
-        # 1-3. Immutable draft read & PolicyGate reassessment
+        vault_path = ""
+        if self.settings_manager:
+            vault_path = str(self.settings_manager.get("obsidian_vault_path") or "")
+
         from app.ollama_router.policy_gate import PolicyGate
 
         gate = PolicyGate()
@@ -430,6 +598,7 @@ class OutboundReviewDialog(QDialog):
                 target_agent=draft.target_agent,
                 content=draft.content,
                 task=draft.task,
+                vault_path=vault_path,
             )
         except Exception as exc:
             QMessageBox.warning(
@@ -439,7 +608,6 @@ class OutboundReviewDialog(QDialog):
             )
             return
 
-        # 4-6. Persist exact draft and fresh assessment together
         assessment_dict = {
             "automatic_classification": assessment.automatic_classification,
             "risk_level": assessment.risk_level,
@@ -449,55 +617,49 @@ class OutboundReviewDialog(QDialog):
             "safe_auto_allowed": assessment.safe_auto_allowed,
         }
         assessment_json = json.dumps(assessment_dict)
+
+        # Persist draft edits & assessment together
         self.review_store.update_draft(
             self.current_item_id, draft.to_dict(), assessment_json=assessment_json
         )
 
-        risk = assessment.risk_level.lower()
-        findings = assessment.findings or []
+        item_metadata = self.items_data.get(self.current_item_id, {})
 
-        # 7-8. Confirmation preview & high-risk check
-        title = draft.content.get("title", "Untitled")
-        findings_str = ", ".join(findings) if findings else "None"
-        preview_text = (
-            f"Please confirm outbound release for item '{self.current_item_id}':\n\n"
-            f"• Title: {title}\n"
-            f"• Kind: {draft.item_kind}\n"
-            f"• Target Agent: {draft.target_agent}\n"
-            f"• Evaluated Risk: {risk.upper()}\n"
-            f"• Privacy Findings: {findings_str}\n"
+        # Display full scrollable read-only preview dialog
+        preview_dialog = OutboundPreviewDialog(
+            item_id=self.current_item_id,
+            draft=draft,
+            assessment=assessment,
+            metadata=item_metadata,
+            parent=self,
         )
-
-        if risk == "high":
-            confirm = QMessageBox.warning(
-                self,
-                "HIGH RISK CONFIRMATION",
-                f"HIGH RISK WARNING!\n{preview_text}\n"
-                "Are you sure you want to approve and transmit this item externally?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-        else:
-            confirm = QMessageBox.question(
-                self,
-                "Confirm Approval & Release",
-                preview_text,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-
-        if confirm != QMessageBox.StandardButton.Yes:
+        if preview_dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        # 9-11. Calculate canonical approved hash and transition to approved_pending_enqueue
-        self.review_store.approve(self.current_item_id, approval_method="manual_ui")
+        # Calculate exact canonical approved content hash from immutable draft
+        c_str, approved_hash = compute_canonical_content_hash(
+            item_kind=draft.item_kind,
+            target_agent=draft.target_agent,
+            content=draft.content,
+            task=draft.task,
+        )
 
-        # 12-13. Call submission service; claim queued only after outbox enqueue succeeds
+        # Transition state to approved_pending_enqueue with approved_content_hash
+        self.review_store.approve(
+            self.current_item_id,
+            approval_method="manual_ui",
+            approved_content_hash=approved_hash,
+        )
+
+        # Submit via OutboundSubmissionService
         try:
             from app.destinations.outbound_submission_service import (
                 OutboundSubmissionService,
             )
 
             submission_service = OutboundSubmissionService(
-                review_store=self.review_store
+                settings_manager=self.settings_manager,
+                review_store=self.review_store,
             )
             submission_service.submit_approved_item(self.current_item_id)
             QMessageBox.information(

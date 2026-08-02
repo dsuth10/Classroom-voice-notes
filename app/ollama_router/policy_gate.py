@@ -371,7 +371,27 @@ class PolicyGate:
             else:
                 checks_passed.append("no_student_registry_match")
         else:
-            checks_passed.append("student_registry_skipped")
+            if vault_path:
+                log_audit_event("POLICY_BLOCKED", "policy_gate", "Configured student registry is unavailable or failed to load.")
+                findings.append("student_registry_unavailable")
+                high_risk_flags.append("student_registry_unavailable")
+            else:
+                checks_passed.append("student_registry_skipped")
+
+
+        # Payload size validation (max 512 KB)
+        import json
+        try:
+            payload_str = json.dumps({"item_kind": item_kind, "target_agent": target_agent, "content": content, "task": task})
+            if len(payload_str.encode("utf-8")) > 524288:
+                findings.append("payload_size_exceeded")
+                high_risk_flags.append("payload_size_exceeded")
+            else:
+                checks_passed.append("payload_size_valid")
+        except Exception:
+            findings.append("invalid_payload_serialization")
+            high_risk_flags.append("invalid_payload_serialization")
+
 
         # 2. Contact details (email & phone)
         email_pattern = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")

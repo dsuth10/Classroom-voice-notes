@@ -22,9 +22,12 @@ def build_outbound_payload_v2(
     release_basis: str = "human_approval",
     approval_metadata: Optional[Dict[str, Any]] = None,
     task: Optional[Dict[str, Any]] = None,
+    checks_passed: Optional[List[str]] = None,
     policy_gate_version: str = "2.0.0",
     now_provider: Optional[Callable[[], datetime]] = None,
 ) -> Tuple[Dict[str, Any], str, str]:
+
+
     """Constructs a cvn.outbound_item.v2 payload dictionary and its deterministic serialisation.
 
     Returns:
@@ -48,9 +51,11 @@ def build_outbound_payload_v2(
         "automatic_classification": automatic_classification,
         "risk_level": risk_level,
         "findings": findings or [],
+        "checks_passed": checks_passed or [],
         "policy_gate_version": policy_gate_version,
         "release_basis": release_basis,
     }
+
 
     if release_basis == "human_approval" or approval_metadata:
         app_meta = approval_metadata or {}

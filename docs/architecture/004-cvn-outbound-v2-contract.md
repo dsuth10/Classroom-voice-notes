@@ -12,32 +12,41 @@ This document specifies the structure, field constraints, lifecycle statuses, an
 
 ---
 
-## 2. Canonical Content Structure & Rules
+## 2. Canonical Content Structure & Rules (RFC 8785)
 
 The canonical content object forms the exact payload data assessed, hashed, and authorized for release:
 
 ```json
 {
+  "content": {},
   "item_kind": "record_only",
   "target_agent": "openclaw",
-  "content": {},
   "task": {}
 }
 ```
 
+### Approved RFC 8785 Packages & Versions
+- **Python**: `rfc8785==0.1.4` (`app/destinations/canonical_json.py`)
+- **TypeScript / Deno**: `npm:canonicalize@2.0.0` (`supabase/functions/_shared/outbound_contract.ts`)
+
 ### Rules:
-1. **Field Defaults**:
-   - Absent or `null` `target_agent` MUST be normalized to `""`.
-   - Absent or `null` `task` MUST be normalized to `{}`.
-2. **Canonical JSON Formatting**:
-   - Object keys sorted recursively in lexicographical (Unicode point) order.
-   - Array order preserved as-is.
-   - UTF-8 string encoding.
-   - No insignificant whitespace (separators `,` and `:` with zero surrounding spaces).
-   - Non-serializable/non-JSON values (NaN, Infinities, non-string keys) MUST be rejected.
-3. **SHA-256 Hashing**:
-   - The SHA-256 hash is computed directly over the UTF-8 encoded canonical JSON string.
+1. **Field Normalization**:
+   - `item_kind`: Default to `"record_only"` if empty or falsy.
+   - `target_agent`: Absent or `null` MUST be normalized to `""`.
+   - `content`: Absent or `null` MUST be normalized to `{}`.
+   - `task`: Absent or `null` MUST be normalized to `{}`.
+2. **RFC 8785 Canonical JSON Formatting**:
+   - **Key Sorting**: Object keys are sorted in UTF-16 code unit order (lexicographical order), including non-BMP Unicode keys.
+   - **Number Formatting**: Standard ECMAScript IEEE-754 / RFC 8785 format (`1.0` -> `1`, `-0.0` -> `0`, `1e21` -> `1e+21`, `1e-7` -> `1e-7`).
+   - **Array Preservation**: Element ordering in arrays is preserved as-is.
+   - **UTF-8 Encoding**: UTF-8 bytes with zero unnecessary whitespace (delimiters `,` and `:` without spaces).
+   - **Domain Validation**: Values outside the JSON domain (`NaN`, positive/negative `Infinity`, non-string object keys, unsupported object types) MUST be rejected before serialization.
+3. **Transport Field Isolation**:
+   - Retry fields (`nonce`, `signature`, `signed_at`, `idempotency_key`, transport wrapper hash) MUST NOT be included in the approved content hash calculation.
+4. **SHA-256 Hashing**:
+   - The SHA-256 hash is computed directly over the UTF-8 encoded RFC 8785 canonical JSON string.
    - Hash output format: Lowercase 64-character hexadecimal string.
+
 
 ---
 

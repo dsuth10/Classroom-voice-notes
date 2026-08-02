@@ -18,6 +18,7 @@ dependencies = [
     "plyer>=2.1.0",
     "icalendar>=5.0.0",
     "keyring>=25.0.0",
+    "rfc8785>=0.1.4",
 ]
 
 [project.optional-dependencies]

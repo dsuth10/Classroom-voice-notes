@@ -265,21 +265,27 @@ class OutboundReviewStore:
         )
 
     def approve(
-        self, item_id: str, approval_method: str = "manual_ui"
+        self,
+        item_id: str,
+        approval_method: str = "manual_ui",
+        approved_content_hash: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Marks item approved_pending_enqueue, storing approved_content_hash and approved_at."""
         existing = self.get_by_id(item_id)
         if not existing:
             return None
 
-        approved_hash = existing["content_hash"]
+        approved_hash = approved_content_hash or existing.get("content_hash")
         now = datetime.now(timezone.utc).isoformat()
 
+        release_basis = "trusted_mode" if approval_method == "trusted_mode" else "human_approval"
         update_params = {
             "approved_content_hash": approved_hash,
             "approved_at": now,
             "approval_method": approval_method,
+            "release_basis": release_basis,
         }
+
 
         return self._execute_checked_transition(
             item_id=item_id,
@@ -287,6 +293,7 @@ class OutboundReviewStore:
             target_status="approved_pending_enqueue",
             update_params=update_params,
         )
+
 
     def mark_enqueue_failed(self, item_id: str, last_error: str) -> Optional[Dict[str, Any]]:
         """Moves item to enqueue_failed with error details.

@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest import mock
 import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -23,59 +24,50 @@ def qapp() -> QApplication:
 @pytest.fixture
 def temp_settings(tmp_path: Path) -> SettingsManager:
     config_file = tmp_path / "settings.json"
-    manager = SettingsManager()
-    manager.config_path = config_file
-    manager.settings = json.loads(json.dumps(DEFAULT_SETTINGS))
-    manager.save_settings(manager.settings)
-    return manager
+    with mock.patch("app.config.settings.get_config_path", return_value=config_file):
+        manager = SettingsManager()
+        manager.config_path = config_file
+        manager.settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+        manager.save_settings(manager.settings)
+        return manager
 
 
 def test_settings_migration_matrix(tmp_path: Path) -> None:
     config_file = tmp_path / "settings.json"
+    with mock.patch("app.config.settings.get_config_path", return_value=config_file):
+        # Case 1: legacy enabled: true, no sharing_mode -> safe_auto
+        config_file.write_text(json.dumps({"external_agent": {"enabled": True}}), encoding="utf-8")
+        sm = SettingsManager()
+        assert sm.external_sharing_mode() == "safe_auto"
+        assert sm.external_sharing_enabled() is True
 
-    # Case 1: legacy enabled: true, no sharing_mode -> safe_auto
-    config_file.write_text(json.dumps({"external_agent": {"enabled": True}}), encoding="utf-8")
-    sm = SettingsManager()
-    sm.config_path = config_file
-    sm.settings = sm.load_settings()
-    assert sm.external_sharing_mode() == "safe_auto"
-    assert sm.external_sharing_enabled() is True
+        # Case 2: legacy enabled: false, no sharing_mode -> off
+        config_file.write_text(json.dumps({"external_agent": {"enabled": False}}), encoding="utf-8")
+        sm = SettingsManager()
+        assert sm.external_sharing_mode() == "off"
+        assert sm.external_sharing_enabled() is False
 
-    # Case 2: legacy enabled: false, no sharing_mode -> off
-    config_file.write_text(json.dumps({"external_agent": {"enabled": False}}), encoding="utf-8")
-    sm = SettingsManager()
-    sm.config_path = config_file
-    sm.settings = sm.load_settings()
-    assert sm.external_sharing_mode() == "off"
-    assert sm.external_sharing_enabled() is False
+        # Case 3: existing valid mode wins over legacy enabled flag
+        config_file.write_text(json.dumps({"external_agent": {"enabled": True, "sharing_mode": "review_all"}}), encoding="utf-8")
+        sm = SettingsManager()
+        assert sm.external_sharing_mode() == "review_all"
 
-    # Case 3: existing valid mode wins over legacy enabled flag
-    config_file.write_text(json.dumps({"external_agent": {"enabled": True, "sharing_mode": "review_all"}}), encoding="utf-8")
-    sm = SettingsManager()
-    sm.config_path = config_file
-    sm.settings = sm.load_settings()
-    assert sm.external_sharing_mode() == "review_all"
-
-    # Case 4: invalid mode fails closed to off
-    config_file.write_text(json.dumps({"external_agent": {"sharing_mode": "invalid_super_mode"}}), encoding="utf-8")
-    sm = SettingsManager()
-    sm.config_path = config_file
-    sm.settings = sm.load_settings()
-    assert sm.external_sharing_mode() == "off"
-    assert sm.external_sharing_enabled() is False
+        # Case 4: invalid mode fails closed to off
+        config_file.write_text(json.dumps({"external_agent": {"sharing_mode": "invalid_super_mode"}}), encoding="utf-8")
+        sm = SettingsManager()
+        assert sm.external_sharing_mode() == "off"
+        assert sm.external_sharing_enabled() is False
 
 
 def test_stable_source_device_id_generation(tmp_path: Path) -> None:
     config_file = tmp_path / "settings.json"
     config_file.write_text(json.dumps({"external_agent": {"source_device_id": ""}}), encoding="utf-8")
+    with mock.patch("app.config.settings.get_config_path", return_value=config_file):
+        sm = SettingsManager()
 
-    sm = SettingsManager()
-    sm.config_path = config_file
-    sm.settings = sm.load_settings()
-
-    device_id = sm.get("external_agent.source_device_id")
-    assert device_id != ""
-    assert device_id.startswith("cvn-device-")
+        device_id = sm.get("external_agent.source_device_id")
+        assert device_id != ""
+        assert device_id.startswith("cvn-device-")
 
 
 @pytest.mark.parametrize("mode,expected_action", [

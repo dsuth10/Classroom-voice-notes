@@ -1,7 +1,6 @@
-"""Unit and SQL structural validation tests for PR 3 Supabase authorization fixes."""
+"""Unit and SQL structural validation tests for Supabase authorization and immutability fixes."""
 
 from pathlib import Path
-import re
 import pytest
 
 
@@ -20,7 +19,6 @@ def test_migration_009_has_valid_dollar_quoting_and_idempotency() -> None:
     migration_file = Path("supabase/migrations/009_cvn_outbound_reaper.sql")
     content = migration_file.read_text(encoding="utf-8")
 
-    # Verify no nested $$ ... $$ inside DO $$
     assert "DO $block$" in content
     assert "$job$SELECT public.cvn_reap_outbound_dead_letters(30);$job$" in content
     assert "cron.unschedule('cvn-reap-outbound-items');" in content
@@ -36,6 +34,20 @@ def test_migration_010_forward_fix_structure() -> None:
     assert "timestamp_skew" in content
     assert "invalid_schema_version" in content
     assert "SET search_path = public, pgmq, pg_temp" in content
+
+
+def test_migration_017_immutability_and_worker_scoping() -> None:
+    migration_file = Path("supabase/migrations/017_cvn_outbound_broker_immutability.sql")
+    assert migration_file.exists(), f"Migration missing at {migration_file}"
+    content = migration_file.read_text(encoding="utf-8")
+
+    assert "trg_prevent_outbound_item_immutability" in content
+    assert "immutable_column_violation" in content
+    assert "missing_worker_id" in content
+    assert "content_hash_mismatch" in content
+    assert "payload_hash_mismatch" in content
+    assert "unauthorized_device" in content
+    assert "REVOKE ALL ON public.cvn_outbound_items FROM PUBLIC, anon, authenticated" in content
 
 
 def test_all_migrations_exist_and_are_sequential() -> None:
@@ -54,6 +66,8 @@ def test_all_migrations_exist_and_are_sequential() -> None:
         "008_cvn_outbound_items.sql",
         "009_cvn_outbound_reaper.sql",
         "010_cvn_outbound_security_fix.sql",
+        "016_cvn_trusted_device_entitlements_v2.sql",
+        "017_cvn_outbound_broker_immutability.sql",
     ]
 
     for name in expected:

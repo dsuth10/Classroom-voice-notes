@@ -1,4 +1,4 @@
-"""Unit test verifying SQL Migration 013 and server trusted entitlement contracts."""
+"""Unit test verifying SQL Migration 013/016 and server trusted entitlement contracts."""
 
 from pathlib import Path
 import pytest
@@ -25,6 +25,25 @@ def test_migration_013_file_structure() -> None:
     assert "GRANT EXECUTE ON FUNCTION public.cvn_evaluate_trusted_entitlement TO service_role" in content
 
 
+def test_migration_016_file_structure() -> None:
+    """Verifies that 016_cvn_trusted_device_entitlements_v2.sql exists and enforces environment PK and policy checks."""
+    migration_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "supabase"
+        / "migrations"
+        / "016_cvn_trusted_device_entitlements_v2.sql"
+    )
+    assert migration_path.exists(), f"Migration missing at {migration_path}"
+    content = migration_path.read_text(encoding="utf-8")
+
+    assert "PRIMARY KEY (client_key_id, source_device_id, environment)" in content
+    assert "check_maximum_risk" in content
+    assert "check_allowed_item_kinds_nonempty" in content
+    assert "check_allowed_target_agents_nonempty" in content
+    assert "check_environment_valid" in content
+    assert "policy_version_mismatch" in content
+
+
 def test_edge_function_trusted_mode_unauthorized_handling() -> None:
     """Verifies edge function contains server-side entitlement evaluation for trusted_mode."""
     edge_fn_path = (
@@ -39,4 +58,5 @@ def test_edge_function_trusted_mode_unauthorized_handling() -> None:
 
     assert "cvn_evaluate_trusted_entitlement" in content
     assert "trusted_mode_unauthorized" in content
-    assert "x-cvn-client-key-id" in content
+    assert "authenticateClient" in content
+    assert "serverClientKeyId" in content
