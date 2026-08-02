@@ -231,11 +231,18 @@ class OutboundReviewStore:
         if not existing:
             return None
 
-        item_kind = draft_dict.get("item_kind", existing["item_kind"])
-        target_agent = draft_dict.get("target_agent", existing["target_agent"])
+        item_kind = str(
+            draft_dict.get("item_kind") or existing.get("item_kind") or "record_only"
+        )
+        target_agent = str(
+            draft_dict.get("target_agent")
+            or existing.get("target_agent")
+            or "openclaw"
+        )
         content = draft_dict.get("content", {})
         task = draft_dict.get("task")
         new_hash = compute_content_hash(item_kind, target_agent, content, task)
+
         draft_str = json.dumps(draft_dict)
 
         update_params = {

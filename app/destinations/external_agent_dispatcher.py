@@ -506,7 +506,11 @@ class ExternalAgentDispatcher:
             )
 
             if response.status_code == 200:
-                return response.json()
+                data = response.json()
+                if isinstance(data, dict):
+                    return data
+                return {"result": str(data)}
+
             elif response.status_code == 404:
                 log_audit_event("STATUS_CHECK_NOT_FOUND", "dispatcher", f"Task {task_id} not found on broker")
                 return {"status": "not_found"}

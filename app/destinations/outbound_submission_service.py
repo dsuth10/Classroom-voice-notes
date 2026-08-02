@@ -1,6 +1,7 @@
 import json
 import sqlite3
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+
 
 from app.audit.audit_logger import log_audit_event
 from app.config.environment import submission_endpoint, UnsupportedContractVersion
@@ -84,6 +85,13 @@ class OutboundSubmissionService:
             else:
                 release_basis_value = "human_approval"
 
+            raw_findings = assessment_dict.get("findings", [])
+            findings_list: List[str] = (
+                [str(f) for f in raw_findings]
+                if isinstance(raw_findings, list)
+                else []
+            )
+
             payload, payload_str, payload_hash = build_outbound_payload_v2(
                 item_id=item_id,
                 source_device_id=source_device_id,
@@ -94,7 +102,7 @@ class OutboundSubmissionService:
                     "automatic_classification", "non_sensitive"
                 ),
                 risk_level=assessment_dict.get("risk_level", "low"),
-                findings=assessment_dict.get("findings", []),
+                findings=findings_list,
                 release_basis=release_basis_value,
                 approval_metadata={
                     "approved_at": item.get("approved_at"),
@@ -103,6 +111,7 @@ class OutboundSubmissionService:
                 },
                 task=task,
             )
+
 
             if hmac_secret:
                 _, payload_str, payload_hash, _ = refresh_transport_signature(
