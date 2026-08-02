@@ -1,12 +1,13 @@
 """Outbound Review Store - SQLite persistence for outbound review items."""
 from datetime import datetime, timedelta, timezone
-import hashlib
 import json
 from pathlib import Path
+
 import sqlite3
 from typing import Any, Dict, List, Optional
 
 from app.audit.audit_logger import log_audit_event
+from app.destinations.canonical_json import compute_canonical_content_hash
 from app.utils.paths import get_app_data_dir
 
 
@@ -29,16 +30,14 @@ def compute_content_hash(
     task: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Computes a deterministic SHA-256 hash of the outbound content fields."""
-    canonical_obj = {
-        "item_kind": item_kind,
-        "target_agent": target_agent or "",
-        "content": content,
-        "task": task or {},
-    }
-    canonical_bytes = json.dumps(
-        canonical_obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
-    return hashlib.sha256(canonical_bytes).hexdigest()
+    _, digest = compute_canonical_content_hash(
+        item_kind=item_kind,
+        target_agent=target_agent,
+        content=content,
+        task=task,
+    )
+    return digest
+
 
 
 class OutboundReviewStore:
@@ -414,3 +413,47 @@ class OutboundReviewStore:
             f"Purged {count} expired review items older than {retention_days} days.",
         )
         return count
+
+    def get_all_items(self) -> List[Dict[str, Any]]:
+        """Retrieves all review items from SQLite store."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM review_items ORDER BY created_at DESC")
+            return [dict(r) for r in cursor.fetchall()]
+
+    def export_to_csv(self, export_path: Any) -> int:
+        """Exports review items from SQLite database to a CSV file.
+
+        The CSV file is strictly an export report; all state reads and transitions
+        rely solely on the SQLite database as the single source of truth.
+        """
+        import csv
+
+        dest_path = Path(export_path)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+        items = self.get_all_items()
+        if not items:
+            fieldnames = [
+                "item_id",
+                "created_at",
+                "updated_at",
+                "item_kind",
+                "target_agent",
+                "status",
+                "content_hash",
+                "approved_content_hash",
+            ]
+            with open(dest_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+            return 0
+
+        fieldnames = list(items[0].keys())
+        with open(dest_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for item in items:
+                writer.writerow(item)
+
+        return len(items)

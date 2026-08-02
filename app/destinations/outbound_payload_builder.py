@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import uuid
 
 from app.destinations.outbound_review_store import compute_content_hash
@@ -23,13 +23,21 @@ def build_outbound_payload_v2(
     approval_metadata: Optional[Dict[str, Any]] = None,
     task: Optional[Dict[str, Any]] = None,
     policy_gate_version: str = "2.0.0",
+    now_provider: Optional[Callable[[], datetime]] = None,
 ) -> Tuple[Dict[str, Any], str, str]:
     """Constructs a cvn.outbound_item.v2 payload dictionary and its deterministic serialisation.
 
     Returns:
         (payload_dict, deterministic_json_str, payload_hash)
     """
-    now = datetime.now(timezone.utc)
+    if now_provider is not None:
+        now = now_provider()
+    else:
+        now = datetime.now(timezone.utc)
+
+    if now.tzinfo is None:
+        raise ValueError("now_provider must return a timezone-aware UTC datetime")
+
     now_iso = now.isoformat()
     idempotency_key = str(uuid.uuid4())
     nonce = str(uuid.uuid4())
@@ -84,6 +92,7 @@ def build_outbound_payload_v2(
 def refresh_transport_signature(
     payload_input: Union[Dict[str, Any], str],
     hmac_secret: str,
+    now_provider: Optional[Callable[[], datetime]] = None,
 ) -> Tuple[Dict[str, Any], str, str, str]:
     """Rebuilds payload transport envelope with fresh signed_at and nonce while maintaining item_id & content_hash.
 
@@ -96,7 +105,15 @@ def refresh_transport_signature(
         payload_dict = dict(payload_input)
 
     refreshed = dict(payload_dict)
-    now_iso = datetime.now(timezone.utc).isoformat()
+    if now_provider is not None:
+        now_dt = now_provider()
+    else:
+        now_dt = datetime.now(timezone.utc)
+
+    if now_dt.tzinfo is None:
+        raise ValueError("now_provider must return a timezone-aware UTC datetime")
+
+    now_iso = now_dt.isoformat()
     refreshed["signed_at"] = now_iso
     refreshed["nonce"] = str(uuid.uuid4())
 

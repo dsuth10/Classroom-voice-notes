@@ -16,7 +16,8 @@ def test_enqueue_and_get_pending(outbox: ExternalOutbox) -> None:
         payload_json='{"test":true}',
         payload_hash="hash123",
         idempotency_key="idem1",
-        nonce="nonce1"
+        nonce="nonce1",
+        schema_version="cvn.outbound_item.v2",
     )
     assert local_id == 1
     
@@ -27,7 +28,7 @@ def test_enqueue_and_get_pending(outbox: ExternalOutbox) -> None:
     assert pending[0]["attempt_count"] == 0
 
 def test_mark_sending_and_sent(outbox: ExternalOutbox) -> None:
-    local_id = outbox.enqueue("CVN-2", "http://test.url", "{}", "hash", "idem2", "nonce2")
+    local_id = outbox.enqueue("CVN-2", "http://test.url", "{}", "hash", "idem2", "nonce2", schema_version="cvn.outbound_item.v2")
     
     outbox.mark_sending(local_id)
     pending = outbox.get_pending()
@@ -46,7 +47,7 @@ def test_mark_sending_and_sent(outbox: ExternalOutbox) -> None:
     assert next_retry_at is None
 
 def test_mark_failed_exponential_backoff(outbox: ExternalOutbox) -> None:
-    local_id = outbox.enqueue("CVN-3", "http://test.url", "{}", "hash", "idem3", "nonce3")
+    local_id = outbox.enqueue("CVN-3", "http://test.url", "{}", "hash", "idem3", "nonce3", schema_version="cvn.outbound_item.v2")
     
     # 1st failure (attempt increments to 1 when sending, then we fail it)
     outbox.mark_sending(local_id)
@@ -73,7 +74,7 @@ def test_mark_failed_exponential_backoff(outbox: ExternalOutbox) -> None:
     assert stats["pending"] == 0
 
 def test_mark_duplicate_409(outbox: ExternalOutbox) -> None:
-    local_id = outbox.enqueue("CVN-4", "http://test.url", "{}", "hash", "idem4", "nonce4")
+    local_id = outbox.enqueue("CVN-4", "http://test.url", "{}", "hash", "idem4", "nonce4", schema_version="cvn.outbound_item.v2")
     outbox.mark_duplicate(local_id, "duplicate_idempotency_key")
     
     stats = outbox.get_stats()
@@ -96,6 +97,7 @@ def test_enqueue_persists_target_agent(outbox: ExternalOutbox) -> None:
         "hash",
         "idem-target",
         "nonce-target",
+        schema_version="cvn.outbound_item.v2",
         target_agent="hermes",
     )
 
@@ -108,7 +110,7 @@ def test_enqueue_persists_target_agent(outbox: ExternalOutbox) -> None:
     assert target_agent == "hermes"
 
 def test_expire_old(outbox: ExternalOutbox) -> None:
-    local_id = outbox.enqueue("CVN-5", "http://test.url", "{}", "hash", "idem5", "nonce5")
+    local_id = outbox.enqueue("CVN-5", "http://test.url", "{}", "hash", "idem5", "nonce5", schema_version="cvn.outbound_item.v2")
     
     # Manipulate created_at to be 8 days ago
     eight_days_ago = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
@@ -125,7 +127,7 @@ def test_expire_old(outbox: ExternalOutbox) -> None:
 
 def test_selective_dead_letter_retry(outbox: ExternalOutbox, monkeypatch) -> None:
     # 1. Enqueue task and mark it dead_letter
-    local_id = outbox.enqueue("CVN-10", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem10", "nonce10")
+    local_id = outbox.enqueue("CVN-10", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem10", "nonce10", schema_version="cvn.outbound_item.v2")
     outbox.mark_sending(local_id)
     outbox.mark_failed(local_id, "Max attempts reached", max_attempts=1)
     
@@ -145,7 +147,7 @@ def test_selective_dead_letter_retry(outbox: ExternalOutbox, monkeypatch) -> Non
 
 def test_selective_dead_letter_retry_wrong_env(outbox: ExternalOutbox, monkeypatch) -> None:
     # Task has staging URL
-    local_id = outbox.enqueue("CVN-11", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem11", "nonce11")
+    local_id = outbox.enqueue("CVN-11", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem11", "nonce11", schema_version="cvn.outbound_item.v2")
     outbox.mark_sending(local_id)
     outbox.mark_failed(local_id, "Max attempts reached", max_attempts=1)
 
@@ -169,6 +171,7 @@ def test_selective_dead_letter_retry_rejects_lookalike_host(
         "hash",
         "idem-lookalike",
         "nonce-lookalike",
+        schema_version="cvn.outbound_item.v2",
     )
     outbox.mark_sending(local_id)
     outbox.mark_failed(local_id, "Max attempts reached", max_attempts=1)
@@ -178,7 +181,7 @@ def test_selective_dead_letter_retry_rejects_lookalike_host(
     assert outbox.get_stats()["dead_letter"] == 1
 
 def test_selective_dead_letter_retry_non_dead_letter(outbox: ExternalOutbox, monkeypatch) -> None:
-    local_id = outbox.enqueue("CVN-12", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem12", "nonce12")
+    local_id = outbox.enqueue("CVN-12", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem12", "nonce12", schema_version="cvn.outbound_item.v2")
     monkeypatch.setenv("CVN_BROKER_ENV", "staging")
     
     # Try to retry a task that is still 'pending'
@@ -186,7 +189,7 @@ def test_selective_dead_letter_retry_non_dead_letter(outbox: ExternalOutbox, mon
     assert res is False
 
 def test_archive_dead_letter_task(outbox: ExternalOutbox) -> None:
-    local_id = outbox.enqueue("CVN-13", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem13", "nonce13")
+    local_id = outbox.enqueue("CVN-13", "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-complete-task", "{}", "hash", "idem13", "nonce13", schema_version="cvn.outbound_item.v2")
     outbox.mark_sending(local_id)
     outbox.mark_failed(local_id, "Max attempts reached", max_attempts=1)
 
@@ -201,3 +204,17 @@ def test_archive_dead_letter_task(outbox: ExternalOutbox) -> None:
     # Ensure archived task cannot be retried
     res_retry = outbox.retry_dead_letter_task(local_id)
     assert res_retry is False
+
+
+def test_enqueue_rejects_unknown_schema_version(outbox: ExternalOutbox) -> None:
+    """Tests that enqueue rejects unknown or missing schema versions."""
+    with pytest.raises(ValueError, match="Unsupported schema_version"):
+        outbox.enqueue(
+            "CVN-BAD-SCHEMA",
+            "http://test.url",
+            "{}",
+            "hash",
+            "idem-bad",
+            "nonce-bad",
+            schema_version="cvn.invalid.v99",
+        )

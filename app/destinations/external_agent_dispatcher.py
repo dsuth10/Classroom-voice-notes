@@ -149,9 +149,11 @@ class ExternalAgentDispatcher:
             payload_hash=payload_hash,
             idempotency_key=payload["idempotency_key"],
             nonce=payload["nonce"],
+            schema_version="cvn.agent_task.v1",
             note_path=note_path,
             target_agent=target_agent,
         )
+
 
         # 9. Perform HTTP POST request
         headers = {

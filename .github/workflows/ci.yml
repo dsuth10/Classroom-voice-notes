@@ -47,8 +47,23 @@ jobs:
       - name: Type-check
         run: uv run --frozen mypy app
 
+      - name: Install Deno
+        uses: denoland/setup-deno@34047466b09a473c090623a31c5040600a943729 # v2.0.2
+        with:
+          deno-version: v2.x
+
+      - name: Check TypeScript formatting
+        run: deno fmt --check supabase/functions/
+
+      - name: Type-check TypeScript contract
+        run: deno check supabase/functions/_shared/outbound_contract.ts supabase/functions/_shared/outbound_contract_test.ts
+
+      - name: Run TypeScript canonical contract tests
+        run: deno test supabase/functions/_shared/outbound_contract_test.ts
+
       - name: Run unit and safe integration tests
         run: uv run --frozen pytest tests -p no:cacheprovider
+
 
   secrets:
     name: Secret scan

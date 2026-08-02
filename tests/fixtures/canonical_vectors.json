@@ -42,6 +42,31 @@
       },
       "expected_canonical_json": "{\"content\":{\"title\":\"Send Weekly Summary\"},\"item_kind\":\"agent_task\",\"target_agent\":\"openclaw\",\"task\":{\"action\":\"notify_parents\",\"recipient\":\"group_a\"}}",
       "expected_hash": "2284753277cee61fd85f7cad888c23e8be458c265570a30b230e0b2e28954777"
+    },
+    {
+      "name": "numbers_and_floats",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "score": 100,
+        "ratio": 0.5,
+        "whole_float": 1.0,
+        "negative": -5
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"negative\":-5,\"ratio\":0.5,\"score\":100,\"whole_float\":1},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "a3b2143d740130038f4f7d2423b476275edfcead9c32dd81a5a5517c2684051c"
+    },
+    {
+      "name": "unicode_and_quotes",
+      "item_kind": "record_only",
+      "target_agent": "openclaw",
+      "content": {
+        "text": "Cafe & Resume 'quotes' \"escaped\""
+      },
+      "task": null,
+      "expected_canonical_json": "{\"content\":{\"text\":\"Cafe & Resume 'quotes' \\\"escaped\\\"\"},\"item_kind\":\"record_only\",\"target_agent\":\"openclaw\",\"task\":{}}",
+      "expected_hash": "ba088ace400fe29bab381880bf60fa273d6df2a7c66b0cdcd0e03b4f87166de9"
     }
   ]
 }

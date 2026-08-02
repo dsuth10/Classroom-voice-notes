@@ -96,4 +96,41 @@ def test_sharing_mode_migration(temp_config_dir: Path) -> None:
     assert manager_disabled.external_sharing_mode() == "off"
 
 
+def test_source_device_id_fresh_and_persistent(temp_config_dir: Path) -> None:
+    """Tests that a fresh load creates and persists a stable source_device_id across instances."""
+    manager1 = SettingsManager()
+    device_id1 = manager1.get("external_agent.source_device_id")
+    assert device_id1 is not None
+    assert device_id1.startswith("cvn-device-")
+
+    manager2 = SettingsManager()
+    device_id2 = manager2.get("external_agent.source_device_id")
+    assert device_id2 == device_id1
+
+
+def test_source_device_id_migration_repair(temp_config_dir: Path) -> None:
+    """Tests that settings file with an empty source_device_id is repaired and saved."""
+    import json
+    config_file = temp_config_dir / "settings.json"
+    legacy_data = {"external_agent": {"source_device_id": "", "sharing_mode": "review_all"}}
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(legacy_data, f)
+
+    manager = SettingsManager()
+    repaired_id = manager.get("external_agent.source_device_id")
+    assert repaired_id is not None
+    assert repaired_id.startswith("cvn-device-")
+
+    new_manager = SettingsManager()
+    assert new_manager.get("external_agent.source_device_id") == repaired_id
+
+
+def test_save_failure_disables_sharing(temp_config_dir: Path) -> None:
+    """Tests that persistence failure disables sharing mode safely."""
+    manager = SettingsManager()
+    with mock.patch.object(manager, "_atomic_save_json", return_value=False):
+        manager.set("external_agent.sharing_mode", "review_all")
+        assert manager.external_sharing_mode() == "off"
+        assert manager.get("external_agent.enabled") is False
+
 

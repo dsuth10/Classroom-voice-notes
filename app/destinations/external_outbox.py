@@ -97,15 +97,20 @@ class ExternalOutbox:
         payload_hash: str,
         idempotency_key: str,
         nonce: str,
+        *,
+        schema_version: str,
         note_path: Optional[str] = None,
         target_agent: Optional[str] = None,
-        schema_version: str = "cvn.outbound_item.v2",
         item_kind: Optional[str] = None,
         content_hash: Optional[str] = None,
         release_basis: Optional[str] = None,
         review_id: Optional[str] = None,
     ) -> int:
         """Enqueues a new pending task in the local outbox."""
+        valid_schemas = {"cvn.agent_task.v1", "cvn.outbound_item.v2"}
+        if schema_version not in valid_schemas:
+            raise ValueError(f"Unsupported schema_version: '{schema_version}'. Must be one of {valid_schemas}")
+
         now_str = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -141,6 +146,7 @@ class ExternalOutbox:
             assert local_id is not None
             log_audit_event("OUTBOX_ENQUEUED", "outbox", f"Task {task_id} enqueued locally (local_id: {local_id})")
             return local_id
+
 
     def get_by_task_id(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Returns outbox row by task_id if exists."""

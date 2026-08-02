@@ -26,6 +26,27 @@ from PySide6.QtWidgets import (
 from app.destinations.outbound_review_store import OutboundReviewStore
 
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class OutboundDraft:
+    """Immutable representation of editable outbound draft fields."""
+
+    item_kind: str
+    target_agent: str
+    content: Dict[str, Any]
+    task: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "item_kind": self.item_kind,
+            "target_agent": self.target_agent,
+            "content": self.content,
+            "task": self.task,
+        }
+
+
 class OutboundReviewDialog(QDialog):
     """Dialog for inspecting, editing, approving, or rejecting outbound captures."""
 
@@ -105,7 +126,7 @@ class OutboundReviewDialog(QDialog):
         form_layout.addRow("Item Kind:", self.item_kind_combo)
 
         self.target_agent_combo = QComboBox()
-        self.target_agent_combo.addItems(["openclaw", "hermes", "auto"])
+        self.target_agent_combo.addItems(["openclaw"])
         form_layout.addRow("Target Agent:", self.target_agent_combo)
 
         self.note_path_label = QLabel("-")
@@ -257,10 +278,10 @@ class OutboundReviewDialog(QDialog):
 
         self.note_path_label.setText(item.get("note_path", "-"))
 
-    def _get_edited_draft(self) -> Dict[str, Any]:
-        """Collects current field values into a draft structure."""
+    def _get_edited_draft(self) -> Optional[OutboundDraft]:
+        """Reads editable fields once into an immutable OutboundDraft value."""
         if not self.current_item_id or self.current_item_id not in self.items_data:
-            return {}
+            return None
 
         existing_item = self.items_data[self.current_item_id]
         existing_draft = {}
@@ -288,25 +309,37 @@ class OutboundReviewDialog(QDialog):
                 "priority": "normal",
             }
 
-        return {
-            "item_kind": item_kind,
-            "target_agent": target_agent,
-            "content": content,
-            "task": task,
-        }
+        return OutboundDraft(
+            item_kind=item_kind,
+            target_agent=target_agent,
+            content=content,
+            task=task,
+        )
 
     def _on_save_edits_clicked(self) -> None:
         if not self.current_item_id:
             return
-        draft_dict = self._get_edited_draft()
+        draft = self._get_edited_draft()
+        if not draft:
+            return
         from app.ollama_router.policy_gate import PolicyGate
+
         gate = PolicyGate()
-        assessment = gate.assess_v2_item(
-            item_kind=draft_dict["item_kind"],
-            target_agent=draft_dict["target_agent"],
-            content=draft_dict["content"],
-            task=draft_dict["task"],
-        )
+        try:
+            assessment = gate.assess_v2_item(
+                item_kind=draft.item_kind,
+                target_agent=draft.target_agent,
+                content=draft.content,
+                task=draft.task,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Assessment Failed",
+                f"Policy gate assessment failed for draft edits: {exc}\nItem remains awaiting review.",
+            )
+            return
+
         assessment_dict = {
             "automatic_classification": assessment.automatic_classification,
             "risk_level": assessment.risk_level,
@@ -316,11 +349,14 @@ class OutboundReviewDialog(QDialog):
             "safe_auto_allowed": assessment.safe_auto_allowed,
         }
         assessment_json = json.dumps(assessment_dict)
-        self.review_store.update_draft(self.current_item_id, draft_dict, assessment_json=assessment_json)
-        
-        # Immediately update UI state
+        self.review_store.update_draft(
+            self.current_item_id, draft.to_dict(), assessment_json=assessment_json
+        )
+
         self.risk_label.setText(assessment.risk_level.upper())
-        self.findings_label.setText(", ".join(assessment.findings) if assessment.findings else "None")
+        self.findings_label.setText(
+            ", ".join(assessment.findings) if assessment.findings else "None"
+        )
         QMessageBox.information(self, "Saved", "Draft edits saved successfully.")
         self.load_items()
 
@@ -380,42 +416,100 @@ class OutboundReviewDialog(QDialog):
         if not self.current_item_id:
             return
 
-        item = self.items_data[self.current_item_id]
-        assessment = {}
+        draft = self._get_edited_draft()
+        if not draft:
+            return
+
+        # 1-3. Immutable draft read & PolicyGate reassessment
+        from app.ollama_router.policy_gate import PolicyGate
+
+        gate = PolicyGate()
         try:
-            assessment = json.loads(item.get("assessment_json", "{}"))
-        except Exception:
-            pass
+            assessment = gate.assess_v2_item(
+                item_kind=draft.item_kind,
+                target_agent=draft.target_agent,
+                content=draft.content,
+                task=draft.task,
+            )
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Assessment Error",
+                f"Policy gate assessment error: {exc}\nItem remains in awaiting review.",
+            )
+            return
 
-        risk = assessment.get("risk_level", "low")
+        # 4-6. Persist exact draft and fresh assessment together
+        assessment_dict = {
+            "automatic_classification": assessment.automatic_classification,
+            "risk_level": assessment.risk_level,
+            "findings": assessment.findings,
+            "checks_passed": assessment.checks_passed,
+            "suggested_redactions": assessment.suggested_redactions,
+            "safe_auto_allowed": assessment.safe_auto_allowed,
+        }
+        assessment_json = json.dumps(assessment_dict)
+        self.review_store.update_draft(
+            self.current_item_id, draft.to_dict(), assessment_json=assessment_json
+        )
 
-        # Save edits first
-        draft_dict = self._get_edited_draft()
-        self.review_store.update_draft(self.current_item_id, draft_dict)
+        risk = assessment.risk_level.lower()
+        findings = assessment.findings or []
 
-        # High risk confirmation
+        # 7-8. Confirmation preview & high-risk check
+        title = draft.content.get("title", "Untitled")
+        findings_str = ", ".join(findings) if findings else "None"
+        preview_text = (
+            f"Please confirm outbound release for item '{self.current_item_id}':\n\n"
+            f"• Title: {title}\n"
+            f"• Kind: {draft.item_kind}\n"
+            f"• Target Agent: {draft.target_agent}\n"
+            f"• Evaluated Risk: {risk.upper()}\n"
+            f"• Privacy Findings: {findings_str}\n"
+        )
+
         if risk == "high":
             confirm = QMessageBox.warning(
                 self,
                 "HIGH RISK CONFIRMATION",
-                "This item contains high-risk privacy findings or restricted content.\n\n"
+                f"HIGH RISK WARNING!\n{preview_text}\n"
                 "Are you sure you want to approve and transmit this item externally?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if confirm != QMessageBox.StandardButton.Yes:
-                return
+        else:
+            confirm = QMessageBox.question(
+                self,
+                "Confirm Approval & Release",
+                preview_text,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
 
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        # 9-11. Calculate canonical approved hash and transition to approved_pending_enqueue
         self.review_store.approve(self.current_item_id, approval_method="manual_ui")
 
+        # 12-13. Call submission service; claim queued only after outbox enqueue succeeds
         try:
-            from app.destinations.outbound_submission_service import OutboundSubmissionService
-            submission_service = OutboundSubmissionService(review_store=self.review_store)
+            from app.destinations.outbound_submission_service import (
+                OutboundSubmissionService,
+            )
+
+            submission_service = OutboundSubmissionService(
+                review_store=self.review_store
+            )
             submission_service.submit_approved_item(self.current_item_id)
             QMessageBox.information(
-                self, "Approved & Enqueued", f"Item '{self.current_item_id}' approved and enqueued for background delivery."
+                self,
+                "Queued for delivery",
+                f"Item '{self.current_item_id}' approved and queued for delivery.",
             )
         except Exception as exc:
             QMessageBox.warning(
-                self, "Enqueue Warning", f"Item approved but outbox enqueue failed: {exc}"
+                self,
+                "Enqueue Warning",
+                f"Item approval saved but outbox enqueue failed: {exc}",
             )
+
         self.load_items()

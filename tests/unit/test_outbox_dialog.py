@@ -29,8 +29,10 @@ def build_dead_letter_outbox(tmp_path: Path) -> ExternalOutbox:
         payload_hash="hash",
         idempotency_key="idem-dialog",
         nonce="nonce-dialog",
+        schema_version="cvn.outbound_item.v2",
         target_agent="openclaw",
     )
+
     outbox.mark_sending(local_id)
     outbox.mark_failed(local_id, "Synthetic failure", max_attempts=1)
     return outbox

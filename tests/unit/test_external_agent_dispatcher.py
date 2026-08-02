@@ -161,6 +161,7 @@ def test_retry_pending_rejects_unapproved_endpoint(
         payload_hash="hash",
         idempotency_key="idem-bad-endpoint",
         nonce="nonce-bad-endpoint",
+        schema_version="cvn.agent_task.v1",
     )
 
     dispatcher = ExternalAgentDispatcher(mock_settings, mock_outbox)
@@ -187,6 +188,7 @@ def test_retry_pending_applies_retention_before_transmission(
         payload_hash="hash",
         idempotency_key="idem-expired",
         nonce="nonce-expired",
+        schema_version="cvn.agent_task.v1",
     )
     eight_days_ago = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
     with sqlite3.connect(mock_outbox.db_path) as conn:
@@ -226,9 +228,11 @@ def test_reconcile_status_preserves_authoritative_target_agent(
         payload_hash="hash",
         idempotency_key=f"idem-{target_agent}",
         nonce=f"nonce-{target_agent}",
+        schema_version="cvn.agent_task.v1",
         note_path=str(note_file),
         target_agent=target_agent if persist_target else None,
     )
+
     mock_outbox.mark_sent(local_id, "remote-id")
     dispatcher = ExternalAgentDispatcher(mock_settings, mock_outbox)
 

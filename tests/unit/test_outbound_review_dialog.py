@@ -92,6 +92,11 @@ def test_dialog_approve_and_reject(
         "information",
         lambda parent, title, text, *args, **kwargs: info_messages.append((title, text)),
     )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda parent, title, text, *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
 
     dialog = OutboundReviewDialog(temp_store)
     dialog._on_approve_clicked()
@@ -101,4 +106,61 @@ def test_dialog_approve_and_reject(
     assert item["status"] == "queued"
     assert item["approved_content_hash"] == item["content_hash"]
 
+
+def test_dialog_edit_triggers_reassessment_before_approval(
+    qapp: QApplication, temp_store: OutboundReviewStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    temp_store.create_review_item(
+        item_id="CVNI-UI-4",
+        note_path="/notes/email.md",
+        item_kind="record_only",
+        target_agent="openclaw",
+        draft_json=json.dumps({"content": {"title": "Clean Note"}}),
+        assessment_json=json.dumps({"risk_level": "low", "findings": []}),
+    )
+
+    warning_titles = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text, *args, **kwargs: warning_titles.append(title) or QMessageBox.StandardButton.No,
+    )
+
+    dialog = OutboundReviewDialog(temp_store)
+    # Edit title to contain PII email address
+    dialog.title_edit.setText("Contact teacher@school.edu")
+    dialog._on_approve_clicked()
+
+    # Verify reassessment flagged high risk and triggered HIGH RISK CONFIRMATION warning box
+    assert "HIGH RISK CONFIRMATION" in warning_titles
+    # Since user clicked No, item remains awaiting_review
+    item = temp_store.get_by_id("CVNI-UI-4")
+    assert item is not None
+    assert item["status"] == "awaiting_review"
+
+
+def test_dialog_cancel_preview_keeps_awaiting_review(
+    qapp: QApplication, temp_store: OutboundReviewStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    temp_store.create_review_item(
+        item_id="CVNI-UI-5",
+        note_path="/notes/cancel.md",
+        item_kind="record_only",
+        target_agent="openclaw",
+        draft_json=json.dumps({"content": {"title": "Cancel Test"}}),
+        assessment_json=json.dumps({"risk_level": "low"}),
+    )
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda parent, title, text, *args, **kwargs: QMessageBox.StandardButton.No,
+    )
+
+    dialog = OutboundReviewDialog(temp_store)
+    dialog._on_approve_clicked()
+
+    item = temp_store.get_by_id("CVNI-UI-5")
+    assert item is not None
+    assert item["status"] == "awaiting_review"
 

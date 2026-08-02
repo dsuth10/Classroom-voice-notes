@@ -163,7 +163,10 @@ class OutboundRoutingService:
             "category": category,
             "tags": classification.get("tags", []),
             "structured_fields": structured_fields,
+            "recorded_at": recorded_at,
+            "duration_seconds": duration_seconds,
         }
+
 
         task = safe_task if default_kind == "agent_task" else None
         draft_dict = {

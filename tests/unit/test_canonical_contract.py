@@ -9,6 +9,10 @@ import json
 from pathlib import Path
 import pytest
 
+from app.destinations.canonical_json import (
+    build_canonical_object,
+    canonicalize_json,
+)
 from app.destinations.outbound_review_store import compute_content_hash
 
 
@@ -18,19 +22,21 @@ def load_vectors() -> list[dict]:
     return data["vectors"]
 
 
+
 @pytest.mark.parametrize("vector", load_vectors(), ids=[v["name"] for v in load_vectors()])
 def test_canonical_json_matches_fixture(vector: dict) -> None:
     """Canonical JSON string must exactly match the expected_canonical_json in the fixture."""
-    obj = {
-        "item_kind": vector["item_kind"],
-        "target_agent": vector["target_agent"] or "",
-        "content": vector["content"],
-        "task": vector["task"] or {},
-    }
-    canonical_str = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    canonical_obj = build_canonical_object(
+        vector["item_kind"],
+        vector["target_agent"],
+        vector["content"],
+        vector["task"],
+    )
+    canonical_str = canonicalize_json(canonical_obj)
     assert canonical_str == vector["expected_canonical_json"], (
         f"Vector '{vector['name']}' canonical JSON mismatch:\n  Got: {canonical_str}\n  Exp: {vector['expected_canonical_json']}"
     )
+
 
 
 @pytest.mark.parametrize("vector", load_vectors(), ids=[v["name"] for v in load_vectors()])

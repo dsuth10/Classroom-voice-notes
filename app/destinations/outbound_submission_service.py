@@ -183,3 +183,84 @@ class OutboundSubmissionService:
                     f"Failed to reconcile item {item_id}: {e}",
                 )
         return count
+
+    def reconcile_remote_statuses(self, broker_client: Optional[Any] = None) -> int:
+        """Reconciles queued local review items against remote Supabase status."""
+        import os
+
+        count = 0
+        with sqlite3.connect(self.review_store.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                "SELECT item_id FROM review_items WHERE status = 'queued'"
+            )
+            queued_items = [row["item_id"] for row in cursor.fetchall()]
+
+        if not queued_items:
+            return 0
+
+        client = broker_client
+        if client is None:
+            try:
+                from supabase import create_client  # type: ignore[attr-defined]
+
+
+                url = self.settings_manager.get("supabase.url", "") or os.environ.get("SUPABASE_URL", "")
+                key = self.settings_manager.get("supabase.service_role_key", "") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+                if url and key:
+                    client = create_client(url, key)
+            except Exception:
+                pass
+
+        if client is None:
+            return 0
+
+        for item_id in queued_items:
+            try:
+                res = client.rpc("cvn_get_outbound_item_status", {"p_item_id": item_id}).execute()
+                if res.data and isinstance(res.data, dict) and res.data.get("found"):
+                    remote_status = res.data.get("status")
+                    if remote_status == "completed":
+                        self.review_store.mark_completed(item_id)
+                        count += 1
+                    elif remote_status in ("failed_permanent", "dead_letter"):
+                        self.review_store.mark_delivery_failed(
+                            item_id, last_error=f"Remote status: {remote_status}"
+                        )
+                        count += 1
+            except Exception as e:
+                log_audit_event(
+                    "OUTBOUND_STATUS_RECONCILE_ERROR",
+                    "submission_service",
+                    f"Failed remote status lookup for {item_id}: {e}",
+                )
+
+        return count
+
+    def run_startup_recovery(
+        self, retention_days: int = 30, broker_client: Optional[Any] = None
+    ) -> Dict[str, int]:
+        """Runs startup retention purge, pending enqueue recovery, and remote status reconciliation."""
+        log_audit_event(
+            "OUTBOUND_STARTUP_RECOVERY_BEGIN",
+            "submission_service",
+            "Starting outbound startup recovery and status reconciliation sequence.",
+        )
+
+        purged_count = self.review_store.purge_expired_reviews(retention_days=retention_days)
+        re_enqueued_count = self.reconcile_pending_enqueues()
+        reconciled_remote_count = self.reconcile_remote_statuses(broker_client=broker_client)
+
+
+        summary = {
+            "purged": purged_count,
+            "re_enqueued": re_enqueued_count,
+            "reconciled_remote": reconciled_remote_count,
+        }
+
+        log_audit_event(
+            "OUTBOUND_STARTUP_RECOVERY_COMPLETE",
+            "submission_service",
+            f"Startup recovery completed: {summary}",
+        )
+        return summary

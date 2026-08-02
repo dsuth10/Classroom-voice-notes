@@ -241,11 +241,52 @@ serve(async (req: Request) => {
     });
   }
 
-  // 7. Invoke Supabase RPC
+  // 7. Initialize Supabase Service Role Client
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+  // 8. Server-Authorized Trusted Mode Capability Evaluation
+  if (payload.privacy?.release_basis === "trusted_mode") {
+    const clientKeyId =
+      req.headers.get("x-cvn-client-key-id") ||
+      payload.client_key_id ||
+      "default_client_key";
+    const environment = Deno.env.get("CVN_ENVIRONMENT") || "staging";
+
+    const { data: entResult, error: entErr } = await supabase.rpc(
+      "cvn_evaluate_trusted_entitlement",
+      {
+        p_client_key_id: clientKeyId,
+        p_source_device_id: payload.source_device_id,
+        p_environment: environment,
+        p_item_kind: payload.item_kind,
+        p_target_agent: payload.target_agent,
+        p_risk_level: payload.privacy?.risk_level ?? "low",
+      },
+    );
+
+    if (entErr || !entResult || !entResult.allowed) {
+      return new Response(
+        JSON.stringify({
+          error: "trusted_mode_unauthorized",
+          reason_code: entResult?.reason_code ?? "entitlement_check_failed",
+          message:
+            entResult?.error_message ??
+            entErr?.message ??
+            "Trusted mode entitlement check failed",
+        }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+  }
+
+  // 9. Invoke Supabase Submission RPC
   const payloadHash = await sha256Hex(bodyText);
 
   const { data, error } = await supabase.rpc("cvn_submit_outbound_item", {
+
     p_item_id: payload.item_id,
     p_source_device_id: payload.source_device_id,
     p_item_kind: payload.item_kind,
