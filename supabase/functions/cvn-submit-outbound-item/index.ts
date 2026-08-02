@@ -1,12 +1,19 @@
 // supabase/functions/cvn-submit-outbound-item/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { computeCanonicalHash, isValidHexSha256 } from "../_shared/outbound_contract.ts";
-import { authenticateClient, ClientAuthenticationError } from "../_shared/client_auth.ts";
+import {
+  computeCanonicalHash,
+  isValidHexSha256,
+} from "../_shared/outbound_contract.ts";
+import {
+  authenticateClient,
+  ClientAuthenticationError,
+} from "../_shared/client_auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, x-cvn-client-key-id, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-cvn-signature, x-cvn-client-key-id, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -54,7 +61,9 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
     errors.push("nonce must be a non-empty string");
   }
   if (!isValidHexSha256(p?.content_hash)) {
-    errors.push("content_hash must be a valid lowercase 64-char SHA-256 string");
+    errors.push(
+      "content_hash must be a valid lowercase 64-char SHA-256 string",
+    );
   }
 
   const releaseBasis = p?.privacy?.release_basis;
@@ -69,15 +78,21 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
   if (["human_approval", "trusted_mode"].includes(releaseBasis)) {
     const app = p?.privacy?.approval;
     if (!app || typeof app !== "object") {
-      errors.push("privacy.approval block required for human_approval/trusted_mode");
+      errors.push(
+        "privacy.approval block required for human_approval/trusted_mode",
+      );
     } else {
       if (!app.approved_at) {
         errors.push("privacy.approval.approved_at required");
       }
       if (!isValidHexSha256(app.approved_content_hash)) {
-        errors.push("privacy.approval.approved_content_hash must be a valid lowercase 64-char hex SHA-256 string");
+        errors.push(
+          "privacy.approval.approved_content_hash must be a valid lowercase 64-char hex SHA-256 string",
+        );
       } else if (app.approved_content_hash !== p?.content_hash) {
-        errors.push("privacy.approval.approved_content_hash must match content_hash");
+        errors.push(
+          "privacy.approval.approved_content_hash must match content_hash",
+        );
       }
     }
   }
@@ -89,7 +104,11 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
     }
   }
 
-  if (p?.item_kind === "record_only" && p?.task != null && Object.keys(p.task).length > 0) {
+  if (
+    p?.item_kind === "record_only" &&
+    p?.task != null &&
+    Object.keys(p.task).length > 0
+  ) {
     errors.push("record_only items must have task empty or null");
   }
   if (
@@ -131,7 +150,10 @@ serve(async (req: Request) => {
     return new Response(
       JSON.stringify({
         error: "unauthorized",
-        message: authErr instanceof ClientAuthenticationError ? authErr.message : "Client authentication failed",
+        message:
+          authErr instanceof ClientAuthenticationError
+            ? authErr.message
+            : "Client authentication failed",
       }),
       {
         status: 401,
@@ -163,11 +185,15 @@ serve(async (req: Request) => {
   }
 
   // 3.5 Device identity binding verification
-  if (clientIdentity.source_device_id && clientIdentity.source_device_id !== payload.source_device_id) {
+  if (
+    clientIdentity.source_device_id &&
+    clientIdentity.source_device_id !== payload.source_device_id
+  ) {
     return new Response(
       JSON.stringify({
         error: "device_identity_mismatch",
-        message: "Payload source_device_id does not match authenticated credential device identity",
+        message:
+          "Payload source_device_id does not match authenticated credential device identity",
       }),
       {
         status: 403,
@@ -181,14 +207,15 @@ serve(async (req: Request) => {
     payload.item_kind,
     payload.target_agent,
     payload.content,
-    payload.task
+    payload.task,
   );
 
   if (serverCanonicalHash !== payload.content_hash) {
     return new Response(
       JSON.stringify({
         error: "content_hash_mismatch",
-        message: "Server-derived canonical content hash does not match payload content_hash",
+        message:
+          "Server-derived canonical content hash does not match payload content_hash",
       }),
       {
         status: 400,
@@ -197,13 +224,16 @@ serve(async (req: Request) => {
     );
   }
 
-  if (["human_approval", "trusted_mode"].includes(payload.privacy?.release_basis)) {
+  if (
+    ["human_approval", "trusted_mode"].includes(payload.privacy?.release_basis)
+  ) {
     const approvedHash = payload.privacy?.approval?.approved_content_hash;
     if (approvedHash !== serverCanonicalHash) {
       return new Response(
         JSON.stringify({
           error: "approved_content_hash_mismatch",
-          message: "Server-derived canonical content hash does not match approved_content_hash",
+          message:
+            "Server-derived canonical content hash does not match approved_content_hash",
         }),
         {
           status: 400,
@@ -268,7 +298,8 @@ serve(async (req: Request) => {
         JSON.stringify({
           error: "trusted_mode_unauthorized",
           reason_code: entResult?.reason_code ?? "entitlement_check_failed",
-          message: entResult?.error_message ?? "Trusted mode entitlement check failed",
+          message:
+            entResult?.error_message ?? "Trusted mode entitlement check failed",
         }),
         {
           status: 403,

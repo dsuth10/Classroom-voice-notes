@@ -11,7 +11,7 @@ export function buildCanonicalObject(
   itemKind: string,
   targetAgent: string | null | undefined,
   content: Record<string, unknown> | null | undefined,
-  task: Record<string, unknown> | null | undefined
+  task: Record<string, unknown> | null | undefined,
 ): CanonicalObject {
   return {
     item_kind: itemKind || "record_only",
@@ -27,7 +27,9 @@ export function validateJsonDomain(val: unknown): void {
   }
   if (typeof val === "number") {
     if (!Number.isFinite(val)) {
-      throw new Error(`Non-finite number ${val} is outside the RFC 8785 JSON domain.`);
+      throw new Error(
+        `Non-finite number ${val} is outside the RFC 8785 JSON domain.`,
+      );
     }
     return;
   }
@@ -46,7 +48,9 @@ export function validateJsonDomain(val: unknown): void {
     }
     return;
   }
-  throw new TypeError(`Value of type ${typeof val} is outside the RFC 8785 JSON domain.`);
+  throw new TypeError(
+    `Value of type ${typeof val} is outside the RFC 8785 JSON domain.`,
+  );
 }
 
 export function toCanonicalJson(obj: unknown): string {
@@ -69,14 +73,18 @@ export function toCanonicalJson(obj: unknown): string {
   return `{${entries.join(",")}}`;
 }
 
-
 export async function computeCanonicalHash(
   itemKind: string,
   targetAgent: string | null | undefined,
   content: Record<string, unknown> | null | undefined,
-  task: Record<string, unknown> | null | undefined
+  task: Record<string, unknown> | null | undefined,
 ): Promise<string> {
-  const canonicalObj = buildCanonicalObject(itemKind, targetAgent, content, task);
+  const canonicalObj = buildCanonicalObject(
+    itemKind,
+    targetAgent,
+    content,
+    task,
+  );
   const jsonString = toCanonicalJson(canonicalObj);
   const encoder = new TextEncoder();
   const data = encoder.encode(jsonString);

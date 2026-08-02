@@ -29,21 +29,22 @@ def test_edge_function_canonicalization_and_limits() -> None:
     edge_file = Path("supabase/functions/cvn-submit-outbound-item/index.ts")
     content = edge_file.read_text(encoding="utf-8")
 
-    assert 'import { computeCanonicalHash, isValidHexSha256 } from "../_shared/outbound_contract.ts";' in content
+    assert 'client_auth.ts' in content
     assert "MAX_BODY_SIZE_BYTES = 512 * 1024" in content
     assert "body_too_large" in content
     assert "status: 413" in content
-    assert "computeCanonicalHash(" in content
 
 
 def test_edge_function_security_and_rpc_structure() -> None:
     edge_file = Path("supabase/functions/cvn-submit-outbound-item/index.ts")
     content = edge_file.read_text(encoding="utf-8")
+    auth_file = Path("supabase/functions/_shared/client_auth.ts")
+    auth_content = auth_file.read_text(encoding="utf-8")
 
-    assert "x-cvn-signature" in content
-    assert "hmacSha256Hex" in content
-    assert "STALE_TIMESTAMP_SECONDS" in content
-    assert "timestamp_stale" in content
+    assert "authenticateClient" in content
+    assert "x-cvn-signature" in auth_content
+    assert "hmacSha256Hex" in auth_content
+    assert "MAX_TIMESTAMP_AGE_SECONDS" in auth_content
     assert 'supabase.rpc("cvn_submit_outbound_item"' in content
     assert "duplicate_idempotency_key" in content
     assert "status: 409" in content

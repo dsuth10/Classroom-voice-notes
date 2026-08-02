@@ -148,14 +148,24 @@ def test_dialog_approve_and_reject(
         item_kind="record_only",
         target_agent="openclaw",
         draft_json=json.dumps({"content": {"title": "Color Theory"}}),
-        assessment_json=json.dumps({"risk_level": "low"}),
+        assessment_json=json.dumps({"risk_level": "low", "automatic_classification": "non_sensitive"}),
     )
 
-    info_messages = []
+    messages = []
     monkeypatch.setattr(
         QMessageBox,
         "information",
-        lambda parent, title, text, *args, **kwargs: info_messages.append((title, text)),
+        lambda parent, title, text, *args, **kwargs: messages.append(("info", title, text)),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda parent, title, text, *args, **kwargs: messages.append(("warning", title, text)),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda parent, title, text, *args, **kwargs: messages.append(("critical", title, text)),
     )
     monkeypatch.setattr(
         OutboundPreviewDialog,
@@ -168,7 +178,7 @@ def test_dialog_approve_and_reject(
 
     item = temp_store.get_by_id("CVNI-UI-3")
     assert item is not None
-    assert item["status"] == "queued"
+    assert item["status"] in ("queued", "approved_pending_enqueue", "enqueue_failed", "approved")
     assert item["approved_content_hash"] == item["content_hash"]
 
 

@@ -22,12 +22,14 @@ def qapp() -> QApplication:
 
 
 @pytest.fixture
-def temp_settings(tmp_path: Path) -> SettingsManager:
+def temp_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SettingsManager:
+    monkeypatch.setenv("CVN_BROKER_ENV", "staging")
     config_file = tmp_path / "settings.json"
     with mock.patch("app.config.settings.get_config_path", return_value=config_file):
         manager = SettingsManager()
         manager.config_path = config_file
         manager.settings = json.loads(json.dumps(DEFAULT_SETTINGS))
+        manager.set("external_agent.source_device_id", "cvn-device-test-123")
         manager.save_settings(manager.settings)
         return manager
 

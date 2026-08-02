@@ -87,6 +87,34 @@ def test_worker_hmac_header_construction() -> None:
     assert "X-CVN-Nonce" in headers
 
 
+def test_worker_5_element_hmac_canonical_calculation() -> None:
+    """Verifies exact 5-element HMAC signature computation METHOD|PATH|TIMESTAMP|NONCE|BODY."""
+    import hashlib
+    import hmac
+
+    worker = OutboundWorkerV2(
+        edge_base_url="https://test.supabase.co/functions/v1",
+        worker_bearer_token="secret-bearer-123",
+        worker_hmac_secret="secret-hmac-456",
+        worker_id="worker-unit-1",
+    )
+
+    path = "/functions/v1/cvn-claim-outbound-item"
+    body = '{"test":1}'
+    headers = worker._make_headers("POST", path, body)
+
+    ts = headers["X-CVN-Timestamp"]
+    nonce = headers["X-CVN-Nonce"]
+    expected_canonical = f"POST|{path}|{ts}|{nonce}|{body}"
+    expected_sig = hmac.new(
+        b"secret-hmac-456",
+        expected_canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    assert headers["X-CVN-Signature"] == expected_sig
+
+
 def test_worker_process_item_return_status() -> None:
     """Verifies process_item returns False when completion HTTP request fails."""
     worker = OutboundWorkerV2(

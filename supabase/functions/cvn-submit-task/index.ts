@@ -4,7 +4,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-cvn-signature, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -94,7 +95,9 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
     p.task.instructions.length === 0 ||
     p.task.instructions.length > MAX_INSTRUCTIONS_LENGTH
   ) {
-    errors.push(`task.instructions required, 1-${MAX_INSTRUCTIONS_LENGTH} chars`);
+    errors.push(
+      `task.instructions required, 1-${MAX_INSTRUCTIONS_LENGTH} chars`,
+    );
   }
   if (
     p?.task?.priority &&
@@ -127,16 +130,25 @@ serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
   if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405, headers: corsHeaders });
+    return new Response("Method not allowed", {
+      status: 405,
+      headers: corsHeaders,
+    });
   }
   if (!HMAC_SECRET || !BEARER_TOKEN || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.error("Missing required secrets");
-    return new Response("Server misconfigured", { status: 500, headers: corsHeaders });
+    return new Response("Server misconfigured", {
+      status: 500,
+      headers: corsHeaders,
+    });
   }
 
   // 1. Bearer token
   const auth = req.headers.get("authorization") ?? "";
-  if (!auth.startsWith("Bearer ") || !timingSafeEqual(auth.slice(7), BEARER_TOKEN)) {
+  if (
+    !auth.startsWith("Bearer ") ||
+    !timingSafeEqual(auth.slice(7), BEARER_TOKEN)
+  ) {
     return new Response("Unauthorized", { status: 401, headers: corsHeaders });
   }
 
@@ -146,7 +158,10 @@ serve(async (req: Request) => {
   const signature = req.headers.get("x-cvn-signature") ?? "";
   const expected = await hmacSha256Hex(body, HMAC_SECRET);
   if (!signature || !timingSafeEqual(signature.toLowerCase(), expected)) {
-    return new Response("Invalid signature", { status: 401, headers: corsHeaders });
+    return new Response("Invalid signature", {
+      status: 401,
+      headers: corsHeaders,
+    });
   }
 
   // 3. Parse JSON
@@ -160,11 +175,17 @@ serve(async (req: Request) => {
   // 4. Stale timestamp check
   const signedAtMs = Date.parse(payload.signed_at);
   if (isNaN(signedAtMs)) {
-    return new Response("Invalid signed_at", { status: 400, headers: corsHeaders });
+    return new Response("Invalid signed_at", {
+      status: 400,
+      headers: corsHeaders,
+    });
   }
   const ageSec = (Date.now() - signedAtMs) / 1000;
   if (Math.abs(ageSec) > STALE_TIMESTAMP_SECONDS) {
-    return new Response("Stale signed_at", { status: 401, headers: corsHeaders });
+    return new Response("Stale signed_at", {
+      status: 401,
+      headers: corsHeaders,
+    });
   }
 
   // 5. Schema validation
@@ -172,7 +193,10 @@ serve(async (req: Request) => {
   if (!v.valid) {
     return new Response(
       JSON.stringify({ error: "schema_validation_failed", errors: v.errors }),
-      { status: 400, headers: { ...corsHeaders, "content-type": "application/json" } }
+      {
+        status: 400,
+        headers: { ...corsHeaders, "content-type": "application/json" },
+      },
     );
   }
 
@@ -189,14 +213,14 @@ serve(async (req: Request) => {
       worker_id: payload.source_device_id ?? "unknown",
       endpoint: "cvn-submit-task",
       signed_at: payload.signed_at,
-      request_hash: payloadHash
+      request_hash: payloadHash,
     });
 
   if (nonceError) {
     if (nonceError.code === "23505") {
       return new Response(JSON.stringify({ error: "duplicate_nonce" }), {
         status: 401,
-        headers: { ...corsHeaders, "content-type": "application/json" }
+        headers: { ...corsHeaders, "content-type": "application/json" },
       });
     }
     console.error("Nonce tracking error:", nonceError);
@@ -220,7 +244,10 @@ serve(async (req: Request) => {
   });
 
   if (error) {
-    if (error.code === "23505" || /duplicate_idempotency_key/i.test(error.message ?? "")) {
+    if (
+      error.code === "23505" ||
+      /duplicate_idempotency_key/i.test(error.message ?? "")
+    ) {
       const { data: existing } = await supabase
         .from("cvn_tasks")
         .select("task_id")
@@ -231,13 +258,16 @@ serve(async (req: Request) => {
           error: "duplicate_idempotency_key",
           task_id: existing?.task_id ?? payload.task_id,
         }),
-        { status: 409, headers: { ...corsHeaders, "content-type": "application/json" } }
+        {
+          status: 409,
+          headers: { ...corsHeaders, "content-type": "application/json" },
+        },
       );
     }
     console.error("cvn_submit_task RPC error:", error);
     return new Response(JSON.stringify({ error: "internal_error" }), {
       status: 500,
-      headers: { ...corsHeaders, "content-type": "application/json" }
+      headers: { ...corsHeaders, "content-type": "application/json" },
     });
   }
 
@@ -246,9 +276,13 @@ serve(async (req: Request) => {
     JSON.stringify({
       accepted: true,
       task_id: row?.task_id ?? payload.task_id,
-      status_url: row?.status_url ?? `/functions/v1/cvn-status/${payload.task_id}`,
+      status_url:
+        row?.status_url ?? `/functions/v1/cvn-status/${payload.task_id}`,
       msg_id: row?.msg_id,
     }),
-    { status: 200, headers: { ...corsHeaders, "content-type": "application/json" } }
+    {
+      status: 200,
+      headers: { ...corsHeaders, "content-type": "application/json" },
+    },
   );
 });

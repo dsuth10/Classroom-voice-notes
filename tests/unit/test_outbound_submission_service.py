@@ -15,7 +15,8 @@ from app.destinations.outbound_submission_service import OutboundSubmissionServi
 
 
 @pytest.fixture
-def temp_env(tmp_path: Path):
+def temp_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("CVN_BROKER_ENV", "staging")
     config_file = tmp_path / "settings.json"
     with mock.patch("app.config.settings.get_config_path", return_value=config_file):
         settings = SettingsManager()

@@ -19,16 +19,34 @@ export class AuthenticationError extends Error {
 }
 
 const MAX_REGISTRY_SIZE_BYTES = 10 * 1024; // 10KB max for credentials JSON
+const MAX_TIMESTAMP_AGE_SECONDS = 300; // 5 minutes freshness window
 
-// Use a fast SHA-256 for mitigating length-extension/timing on bearer token
+// In-memory nonce cache with TTL for replay protection
+const seenNonces = new Map<string, number>();
+
+function pruneSeenNonces(nowSeconds: number) {
+  for (const [nonce, ts] of seenNonces.entries()) {
+    if (nowSeconds - ts > MAX_TIMESTAMP_AGE_SECONDS * 2) {
+      seenNonces.delete(nonce);
+    }
+  }
+}
+
+// Fast SHA-256 for mitigating length-extension/timing on bearer token
 export async function sha256Hex(s: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  const buf = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(s),
+  );
   return Array.from(new Uint8Array(buf))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
 }
 
-export async function hmacSha256Hex(body: string, secret: string): Promise<string> {
+export async function hmacSha256Hex(
+  body: string,
+  secret: string,
+): Promise<string> {
   const encoder = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
@@ -54,11 +72,13 @@ export function timingSafeEqual(a: string, b: string): boolean {
 
 export async function authenticateWorker(
   req: Request,
-  rawBodyOrCanonicalString: string
+  rawBodyOrCanonicalString: string,
 ): Promise<AuthenticatedWorker> {
   const authHeader = req.headers.get("authorization") ?? "";
   const signature = req.headers.get("x-cvn-signature") ?? "";
   const keyId = req.headers.get("x-cvn-key-id") ?? "";
+  const timestampStr = req.headers.get("x-cvn-timestamp") ?? "";
+  const nonce = req.headers.get("x-cvn-nonce") ?? "";
 
   if (!authHeader.startsWith("Bearer ")) {
     throw new AuthenticationError("Missing or invalid authorization header");
@@ -66,51 +86,36 @@ export async function authenticateWorker(
   if (!signature) {
     throw new AuthenticationError("Missing signature");
   }
+  if (!keyId) {
+    throw new AuthenticationError("Missing key ID");
+  }
+  if (!timestampStr) {
+    throw new AuthenticationError("Missing timestamp header");
+  }
+  if (!nonce) {
+    throw new AuthenticationError("Missing nonce header");
+  }
+
+  // 1. Timestamp Freshness Check
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const reqTimestamp = parseInt(timestampStr, 10);
+  if (
+    isNaN(reqTimestamp) ||
+    Math.abs(nowSeconds - reqTimestamp) > MAX_TIMESTAMP_AGE_SECONDS
+  ) {
+    throw new AuthenticationError("Stale or invalid request timestamp");
+  }
+
+  // 2. Nonce Replay Protection Check
+  pruneSeenNonces(nowSeconds);
+  const nonceKey = `${keyId}:${nonce}`;
+  if (seenNonces.has(nonceKey)) {
+    throw new AuthenticationError("Nonce already used");
+  }
 
   const providedBearer = authHeader.slice(7);
 
-  // 1. Legacy Fallback Path
-  if (!keyId) {
-    const legacyBearer = Deno.env.get("AGENT_BROKER_BEARER_TOKEN") ?? "";
-    const legacyHmac = Deno.env.get("AGENT_BROKER_HMAC_SECRET") ?? "";
-
-    if (!legacyBearer || !legacyHmac) {
-      throw new AuthenticationError("Legacy authentication disabled");
-    }
-
-    const providedHash = await sha256Hex(providedBearer);
-    const legacyHash = await sha256Hex(legacyBearer);
-
-    if (!timingSafeEqual(providedHash, legacyHash)) {
-      throw new AuthenticationError("Invalid legacy bearer");
-    }
-
-    const url = new URL(req.url);
-    const fullCanonical = `${req.method.toUpperCase()}|${url.pathname}|${rawBodyOrCanonicalString}`;
-    const expectedSigFull = await hmacSha256Hex(fullCanonical, legacyHmac);
-    const expectedSigBody = await hmacSha256Hex(rawBodyOrCanonicalString, legacyHmac);
-
-    if (
-      !timingSafeEqual(signature.toLowerCase(), expectedSigFull.toLowerCase()) &&
-      !timingSafeEqual(signature.toLowerCase(), expectedSigBody.toLowerCase())
-    ) {
-      throw new AuthenticationError("Invalid legacy signature");
-    }
-
-    console.warn("WARN: Legacy missing-key-ID fallback used. This path is deprecated.");
-
-    return {
-      key_id: "legacy-hermes-key",
-      allowed_targets: ["hermes"],
-      allowed_worker_ids: [],
-      allowed_kinds: ["record_only", "agent_task"],
-      max_visibility_timeout: 300,
-      batch_limit: 1,
-      legacy: true,
-    };
-  }
-
-  // 2. Multi-Worker Identity Path
+  // 3. Multi-Worker Identity & Registry Validation
   if (keyId.length > 64 || !/^[a-zA-Z0-9_-]+$/.test(keyId)) {
     throw new AuthenticationError("Invalid key ID format");
   }
@@ -131,7 +136,11 @@ export async function authenticateWorker(
     throw new AuthenticationError("Malformed registry JSON");
   }
 
-  if (registry.version !== "1.0" || typeof registry.keys !== "object" || registry.keys === null) {
+  if (
+    registry.version !== "1.0" ||
+    typeof registry.keys !== "object" ||
+    registry.keys === null
+  ) {
     throw new AuthenticationError("Unsupported or invalid registry schema");
   }
 
@@ -144,15 +153,21 @@ export async function authenticateWorker(
     throw new AuthenticationError("Key disabled");
   }
 
+  // Strict Fail-Closed Validation of Permission Arrays
+  const allowedKinds = keyConfig.allowed_kinds || ["record_only", "agent_task"];
   if (
     typeof keyConfig.bearer_token !== "string" ||
     typeof keyConfig.hmac_secret !== "string" ||
     !Array.isArray(keyConfig.allowed_targets) ||
     keyConfig.allowed_targets.length === 0 ||
     !Array.isArray(keyConfig.allowed_worker_ids) ||
-    keyConfig.allowed_worker_ids.length === 0
+    keyConfig.allowed_worker_ids.length === 0 ||
+    !Array.isArray(allowedKinds) ||
+    allowedKinds.length === 0
   ) {
-    throw new AuthenticationError("Invalid key configuration in registry");
+    throw new AuthenticationError(
+      "Invalid key configuration or empty permission list",
+    );
   }
 
   const allowedKeys = [
@@ -171,36 +186,33 @@ export async function authenticateWorker(
     }
   }
 
+  // 4. Bearer Hash Verification
   const providedBearerHash = await sha256Hex(providedBearer);
   const expectedBearerHash = await sha256Hex(keyConfig.bearer_token);
-
-  let isAuthenticated = true;
-
   if (!timingSafeEqual(providedBearerHash, expectedBearerHash)) {
-    isAuthenticated = false;
-  }
-
-  const url = new URL(req.url);
-  const fullCanonical = `${req.method.toUpperCase()}|${url.pathname}|${rawBodyOrCanonicalString}`;
-  const expectedSigFull = await hmacSha256Hex(fullCanonical, keyConfig.hmac_secret);
-  const expectedSigBody = await hmacSha256Hex(rawBodyOrCanonicalString, keyConfig.hmac_secret);
-
-  if (
-    !timingSafeEqual(signature.toLowerCase(), expectedSigFull.toLowerCase()) &&
-    !timingSafeEqual(signature.toLowerCase(), expectedSigBody.toLowerCase())
-  ) {
-    isAuthenticated = false;
-  }
-
-  if (!isAuthenticated) {
     throw new AuthenticationError("Invalid credentials");
   }
+
+  // 5. 5-Element Canonical HMAC Signature Verification: METHOD|PATH|TIMESTAMP|NONCE|BODY
+  const url = new URL(req.url);
+  const canonicalString = `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${rawBodyOrCanonicalString}`;
+  const expectedSig = await hmacSha256Hex(
+    canonicalString,
+    keyConfig.hmac_secret,
+  );
+
+  if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {
+    throw new AuthenticationError("Invalid signature");
+  }
+
+  // Record nonce only after signature and credentials are fully verified
+  seenNonces.set(nonceKey, nowSeconds);
 
   return {
     key_id: keyId,
     allowed_targets: keyConfig.allowed_targets,
     allowed_worker_ids: keyConfig.allowed_worker_ids,
-    allowed_kinds: keyConfig.allowed_kinds || ["record_only", "agent_task"],
+    allowed_kinds: allowedKinds,
     max_visibility_timeout: keyConfig.max_visibility_timeout || 300,
     batch_limit: keyConfig.batch_limit || 1,
     legacy: false,

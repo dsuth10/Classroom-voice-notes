@@ -13,8 +13,11 @@ from app.destinations.outbound_review_store import (
 from app.destinations.outbound_submission_service import OutboundSubmissionService
 
 
-def test_startup_recovery_and_remote_status_reconciliation(tmp_path: Path) -> None:
+def test_startup_recovery_and_remote_status_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Verifies startup recovery workflow, pending enqueue recovery, and remote status reconciliation."""
+    monkeypatch.setenv("CVN_BROKER_ENV", "staging")
     db_file = tmp_path / "test_recovery_pr10.db"
     store = OutboundReviewStore(db_file)
 

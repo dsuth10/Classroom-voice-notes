@@ -56,7 +56,7 @@ class OutboundWorkerV2:
         timestamp = str(int(time.time()))
         nonce = uuid.uuid4().hex
 
-        canonical_text = f"{method.upper()}|{path}|{body_str}"
+        canonical_text = f"{method.upper()}|{path}|{timestamp}|{nonce}|{body_str}"
         sig = hmac.new(
             self.worker_hmac_secret.encode("utf-8"),
             canonical_text.encode("utf-8"),

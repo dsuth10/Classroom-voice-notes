@@ -1,11 +1,18 @@
 // supabase/functions/cvn-status/index.ts
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { authenticateWorker, AuthenticationError, sha256Hex, hmacSha256Hex, timingSafeEqual } from "../_shared/broker_auth.ts";
+import {
+  authenticateWorker,
+  AuthenticationError,
+  sha256Hex,
+  hmacSha256Hex,
+  timingSafeEqual,
+} from "../_shared/broker_auth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-cvn-signature, x-cvn-key-id, content-type",
+  "Access-Control-Allow-Headers":
+    "authorization, x-cvn-signature, x-cvn-key-id, content-type",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
 
@@ -21,11 +28,22 @@ serve(async (req: Request) => {
     return new Response("ok", { headers: corsHeaders });
   }
   if (req.method !== "GET") {
-    return new Response("Method not allowed", { status: 405, headers: corsHeaders });
+    return new Response("Method not allowed", {
+      status: 405,
+      headers: corsHeaders,
+    });
   }
-  if (!CVN_HMAC_SECRET || !CVN_BEARER_TOKEN || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  if (
+    !CVN_HMAC_SECRET ||
+    !CVN_BEARER_TOKEN ||
+    !SUPABASE_URL ||
+    !SUPABASE_SERVICE_KEY
+  ) {
     console.error("Missing required secrets");
-    return new Response("Server misconfigured", { status: 500, headers: corsHeaders });
+    return new Response("Server misconfigured", {
+      status: 500,
+      headers: corsHeaders,
+    });
   }
 
   // 1. Parse URL & Path
@@ -36,7 +54,7 @@ serve(async (req: Request) => {
   if (!taskId || !/^CVN-\d{8}-\d{6}-[A-Z0-9]{4}$/.test(taskId)) {
     return new Response(JSON.stringify({ error: "missing_task_id" }), {
       status: 400,
-      headers: { ...corsHeaders, "content-type": "application/json" }
+      headers: { ...corsHeaders, "content-type": "application/json" },
     });
   }
 
@@ -45,17 +63,26 @@ serve(async (req: Request) => {
   const nonce = url.searchParams.get("nonce") ?? "";
 
   if (!signedAt || !nonce || nonce.length < 16 || nonce.length > 64) {
-    return new Response("Missing or invalid signed_at/nonce", { status: 400, headers: corsHeaders });
+    return new Response("Missing or invalid signed_at/nonce", {
+      status: 400,
+      headers: corsHeaders,
+    });
   }
 
   // 3. Stale timestamp check
   const signedAtMs = Date.parse(signedAt);
   if (isNaN(signedAtMs)) {
-    return new Response("Invalid signed_at", { status: 400, headers: corsHeaders });
+    return new Response("Invalid signed_at", {
+      status: 400,
+      headers: corsHeaders,
+    });
   }
   const ageSec = (Date.now() - signedAtMs) / 1000;
   if (Math.abs(ageSec) > STALE_TIMESTAMP_SECONDS) {
-    return new Response("Stale signed_at", { status: 401, headers: corsHeaders });
+    return new Response("Stale signed_at", {
+      status: 401,
+      headers: corsHeaders,
+    });
   }
 
   const canonicalString = `GET\n/functions/v1/cvn-status/${taskId}\ntask_id=${taskId}\nsigned_at=${signedAt}\nnonce=${nonce}`;
@@ -76,8 +103,14 @@ serve(async (req: Request) => {
       isClient = true;
       const signature = req.headers.get("x-cvn-signature") ?? "";
       const expected = await hmacSha256Hex(canonicalString, CVN_HMAC_SECRET);
-      if (!signature || !timingSafeEqual(signature.toLowerCase(), expected.toLowerCase())) {
-        return new Response("Invalid signature", { status: 401, headers: corsHeaders });
+      if (
+        !signature ||
+        !timingSafeEqual(signature.toLowerCase(), expected.toLowerCase())
+      ) {
+        return new Response("Invalid signature", {
+          status: 401,
+          headers: corsHeaders,
+        });
       }
     }
   }
@@ -91,7 +124,10 @@ serve(async (req: Request) => {
         return new Response(e.message, { status: 401, headers: corsHeaders });
       }
       console.error("Authentication check error:", e);
-      return new Response("Internal Server Error", { status: 500, headers: corsHeaders });
+      return new Response("Internal Server Error", {
+        status: 500,
+        headers: corsHeaders,
+      });
     }
   }
 
@@ -105,14 +141,14 @@ serve(async (req: Request) => {
       worker_id: isClient ? "client" : principal?.key_id,
       endpoint: "cvn-status",
       signed_at: signedAt,
-      request_hash: requestHash
+      request_hash: requestHash,
     });
 
   if (nonceError) {
     if (nonceError.code === "23505") {
       return new Response(JSON.stringify({ error: "duplicate_nonce" }), {
         status: 401,
-        headers: { ...corsHeaders, "content-type": "application/json" }
+        headers: { ...corsHeaders, "content-type": "application/json" },
       });
     }
     console.error("Nonce tracking error:", nonceError);
@@ -121,7 +157,9 @@ serve(async (req: Request) => {
   // 6. Query Task (withhold sensitive payload)
   const { data: task, error } = await supabase
     .from("cvn_tasks")
-    .select("task_id, status, target_agent, created_at, claimed_at, completed_at, failed_at, retry_count, result_summary, error_message, error_code")
+    .select(
+      "task_id, status, target_agent, created_at, claimed_at, completed_at, failed_at, retry_count, result_summary, error_message, error_code",
+    )
     .eq("task_id", taskId)
     .maybeSingle();
 
@@ -129,7 +167,7 @@ serve(async (req: Request) => {
     console.error("Database query error:", error);
     return new Response(JSON.stringify({ error: "internal_error" }), {
       status: 500,
-      headers: { ...corsHeaders, "content-type": "application/json" }
+      headers: { ...corsHeaders, "content-type": "application/json" },
     });
   }
 
@@ -137,12 +175,12 @@ serve(async (req: Request) => {
     if (!isClient) {
       return new Response(JSON.stringify({ error: "unauthorized" }), {
         status: 403,
-        headers: { ...corsHeaders, "content-type": "application/json" }
+        headers: { ...corsHeaders, "content-type": "application/json" },
       });
     }
     return new Response(JSON.stringify({ error: "task_not_found" }), {
       status: 404,
-      headers: { ...corsHeaders, "content-type": "application/json" }
+      headers: { ...corsHeaders, "content-type": "application/json" },
     });
   }
 
@@ -151,13 +189,13 @@ serve(async (req: Request) => {
     if (!principal.allowed_targets.includes(task.target_agent)) {
       return new Response(JSON.stringify({ error: "unauthorized" }), {
         status: 403,
-        headers: { ...corsHeaders, "content-type": "application/json" }
+        headers: { ...corsHeaders, "content-type": "application/json" },
       });
     }
   }
 
   return new Response(JSON.stringify(task), {
     status: 200,
-    headers: { ...corsHeaders, "content-type": "application/json" }
+    headers: { ...corsHeaders, "content-type": "application/json" },
   });
 });
