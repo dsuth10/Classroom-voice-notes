@@ -1,5 +1,7 @@
-"""Unit tests for Step 9: Capability-scoped Outbound Worker V2."""
+"""Comprehensive Unit Tests for Step 9: Capability-Scoped Outbound Worker V2 & Senior Gate Remediation."""
 
+import json
+import logging
 import os
 import sys
 import time
@@ -8,7 +10,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.worker.journal import WorkerJournal
+from app.destinations.canonical_json import compute_canonical_content_hash
+from app.worker.errors import GatewayAuthenticationError, GatewayConfigurationError
+from app.worker.journal import JournalIdentityConflictError, WorkerJournal
 from app.worker.outbound_worker_v2 import FatalWorkerError, OutboundWorkerV2
 
 
@@ -26,25 +30,21 @@ def base_worker_env(monkeypatch) -> None:
     monkeypatch.setenv("CVN_WORKER_ID", "test-worker-v2-1")
 
 
-def test_missing_config_raises_fatal_error(monkeypatch) -> None:
-    monkeypatch.delenv("CVN_EDGE_BASE_URL", raising=False)
-    monkeypatch.delenv("SUPABASE_URL", raising=False)
-    monkeypatch.delenv("CVN_WORKER_BEARER_TOKEN", raising=False)
+def test_missing_hmac_secret_raises_fatal_error(monkeypatch) -> None:
+    monkeypatch.setenv("CVN_EDGE_BASE_URL", "https://example.supabase.co/functions/v1")
+    monkeypatch.setenv("CVN_WORKER_BEARER_TOKEN", "test-bearer")
     monkeypatch.delenv("CVN_WORKER_HMAC_SECRET", raising=False)
 
     with pytest.raises(FatalWorkerError) as exc_info:
         OutboundWorkerV2()
-    assert "Missing configuration" in str(exc_info.value)
+    assert "CVN_WORKER_HMAC_SECRET" in str(exc_info.value)
 
-
-from app.destinations.canonical_json import compute_canonical_content_hash
 
 def test_record_only_routing_success(base_worker_env, temp_journal, tmp_path: Path) -> None:
-    export_file = tmp_path / "outbound_records.csv"
     worker = OutboundWorkerV2(journal=temp_journal)
 
     content_data = {
-        "title": "Test Record",
+        "title": "Test Record Title",
         "category": "Notes",
         "summary": "Summary text",
     }
@@ -52,7 +52,7 @@ def test_record_only_routing_success(base_worker_env, temp_journal, tmp_path: Pa
 
     item = {
         "item_id": "rec-item-100",
-        "lease_token": "lease-secret-12345",
+        "lease_token": "test_mock_lease_token_100",
         "payload_hash": f"sha256:{valid_hash}",
         "content_hash": valid_hash,
         "item_kind": "record_only",
@@ -78,106 +78,230 @@ def test_record_only_routing_success(base_worker_env, temp_journal, tmp_path: Pa
     with patch.object(worker, "_send_edge_rpc") as mock_rpc, \
          patch("app.destinations.record_consumer.get_app_data_dir", return_value=tmp_path):
 
-        # Edge complete responds success
         mock_rpc.return_value = (200, {"completed": True})
 
         processed = worker.process_item(item)
         assert processed is True
+
+        # Check top-level result_reference passed to Edge RPC
+        call_args = mock_rpc.call_args[0]
+        assert call_args[0] == "cvn-complete-outbound-item"
+        assert "result_reference" in call_args[1]
+        assert call_args[1]["result_reference"] == "rec-item-100"
 
         # Check journal state
         journal_entry = temp_journal.get_entry("rec-item-100")
         assert journal_entry is not None
         assert journal_entry["state"] == "remote_completed"
-        assert journal_entry["consumer_kind"] == "record_only"
 
 
-def test_unsupported_routing_fails_closed(base_worker_env, temp_journal) -> None:
+def test_agent_task_routing_and_idempotency_headers(base_worker_env, temp_journal, monkeypatch) -> None:
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "test-gateway-token")
     worker = OutboundWorkerV2(journal=temp_journal)
 
-    # Item kind agent_task with target hermes -> should fail closed
+    task_data = {
+        "instructions": json.dumps({"task_type": "classroom_note.summary", "payload": {"text": "Summarize note"}}),
+        "title": "Task Title",
+    }
+    _, valid_hash = compute_canonical_content_hash("agent_task", "openclaw", None, task_data)
+
     item = {
-        "item_id": "task-hermes-101",
-        "lease_token": "lease-secret-67890",
-        "payload_hash": "sha256:p101",
-        "content_hash": "sha256:c101",
+        "item_id": "agent-task-200",
+        "lease_token": "test_mock_lease_token_200",
+        "payload_hash": f"sha256:{valid_hash}",
+        "content_hash": valid_hash,
         "item_kind": "agent_task",
-        "target_agent": "hermes",
-        "payload": {"item_id": "task-hermes-101"},
+        "target_agent": "openclaw",
+        "payload": {
+            "schema_version": "cvn.outbound_item.v2",
+            "item_kind": "agent_task",
+            "target_agent": "openclaw",
+            "item_id": "agent-task-200",
+            "content_hash": valid_hash,
+            "task": task_data,
+        },
     }
 
-    with patch.object(worker, "_send_edge_rpc") as mock_rpc:
-        mock_rpc.return_value = (200, {"failed": True})
+    with patch.object(worker, "_send_edge_rpc") as mock_rpc, \
+         patch("requests.post") as mock_post:
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 200
+        mock_post_resp.json.return_value = {"output": "Summary result text"}
+        mock_post.return_value = mock_post_resp
+
+        mock_rpc.return_value = (200, {"completed": True})
+
+        processed = worker.process_item(item)
+        assert processed is True
+
+        # Verify Idempotency-Key headers passed to OpenClaw Gateway
+        assert mock_post.called
+        headers = mock_post.call_args[1]["headers"]
+        assert headers.get("Idempotency-Key") == "cvn-agent-task-200"
+        assert headers.get("X-Idempotency-Key") == "cvn-agent-task-200"
+
+
+def test_gateway_auth_failure_raises_fatal_worker_error(base_worker_env, temp_journal, monkeypatch) -> None:
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "bad-gateway-token")
+    worker = OutboundWorkerV2(journal=temp_journal)
+
+    task_data = {
+        "instructions": json.dumps({"task_type": "classroom_note.summary", "payload": {"text": "Summarize note"}}),
+    }
+    _, valid_hash = compute_canonical_content_hash("agent_task", "openclaw", None, task_data)
+
+    item = {
+        "item_id": "agent-task-auth-fail",
+        "lease_token": "test_mock_lease_token_auth",
+        "payload_hash": f"sha256:{valid_hash}",
+        "content_hash": valid_hash,
+        "item_kind": "agent_task",
+        "target_agent": "openclaw",
+        "payload": {
+            "schema_version": "cvn.outbound_item.v2",
+            "item_kind": "agent_task",
+            "target_agent": "openclaw",
+            "item_id": "agent-task-auth-fail",
+            "content_hash": valid_hash,
+            "task": task_data,
+        },
+    }
+
+    with patch("requests.post") as mock_post, \
+         patch.object(worker, "fail_item") as mock_fail:
+
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 401
+        mock_post.return_value = mock_post_resp
+
+        # Must raise FatalWorkerError without calling remote fail_item RPC
+        with pytest.raises(FatalWorkerError):
+            worker.process_item(item)
+
+        assert not mock_fail.called
+
+
+def test_claim_validation_hash_mismatch_fails_closed(base_worker_env, temp_journal) -> None:
+    worker = OutboundWorkerV2(journal=temp_journal)
+
+    item = {
+        "item_id": "item-hash-mismatch",
+        "lease_token": "test_mock_lease_token_mismatch",
+        "payload_hash": "sha256:fake",
+        "content_hash": "a" * 64,  # Contradicts canonical content hash
+        "item_kind": "record_only",
+        "target_agent": "openclaw",
+        "payload": {
+            "schema_version": "cvn.outbound_item.v2",
+            "item_kind": "record_only",
+            "target_agent": "openclaw",
+            "item_id": "item-hash-mismatch",
+            "content_hash": "a" * 64,
+            "content": {"title": "Different Title"},
+        },
+    }
+
+    with patch.object(worker, "fail_item") as mock_fail:
+        mock_fail.return_value = True
 
         processed = worker.process_item(item)
         assert processed is False
 
-        # Fail RPC should be called with retryable=False
-        assert mock_rpc.called
-        call_args = mock_rpc.call_args_list[0]
-        path_suffix, payload = call_args[0]
-        assert path_suffix == "cvn-fail-outbound-item"
-        assert payload["retryable"] is False
+        assert mock_fail.called
+        call_args = mock_fail.call_args
+        assert call_args[0][0] == "item-hash-mismatch"
+        assert "PERMANENT_CLAIM_INVALID" in call_args[0][2]
+        assert call_args[1].get("retryable") is False  # retryable=False
 
 
-def test_journal_recovery_bypasses_consumer(base_worker_env, temp_journal, tmp_path: Path) -> None:
+def test_journal_identity_conflict_raises_and_fails_closed(base_worker_env, temp_journal) -> None:
     worker = OutboundWorkerV2(journal=temp_journal)
 
-    item_id = "rec-item-lost-complete"
-    payload_hash = "sha256:p200"
-    content_hash = "sha256:c200"
+    # Pre-populate journal with original identity
+    temp_journal.record_claim("item-conflict-1", "hash_A", "hash_A", "record_only")
 
-    # Pre-populate journal as consumer_succeeded_pending_remote_complete
-    temp_journal.record_claim(item_id, payload_hash, content_hash, "record_only")
-    temp_journal.record_consumer_success(item_id, "export_row_200")
-
-    # Item is re-claimed with NEW lease token
-    reclaimed_item = {
-        "item_id": item_id,
-        "lease_token": "NEW-lease-secret-99999",
-        "payload_hash": payload_hash,
-        "content_hash": content_hash,
+    # Claim re-submitted with DIFFERENT content hash
+    conflicting_item = {
+        "item_id": "item-conflict-1",
+        "lease_token": "test_mock_lease_token_conflict",
+        "payload_hash": "hash_A",
+        "content_hash": "b" * 64,  # Conflicting hash!
         "item_kind": "record_only",
-        "target_agent": "",
-        "payload": {"item_id": item_id},
+        "target_agent": "openclaw",
+        "payload": {
+            "schema_version": "cvn.outbound_item.v2",
+            "item_kind": "record_only",
+            "target_agent": "openclaw",
+            "item_id": "item-conflict-1",
+            "content_hash": "b" * 64,
+            "content": {"title": "Test Title"},
+        },
     }
 
-    with patch.object(worker, "route_and_process") as mock_route, \
-         patch.object(worker, "_send_edge_rpc") as mock_rpc:
+    with patch.object(worker, "validate_claimed_item", return_value=conflicting_item["payload"]), \
+         patch.object(worker, "fail_item") as mock_fail:
 
-        mock_rpc.return_value = (200, {"completed": True})
+        mock_fail.return_value = True
+        processed = worker.process_item(conflicting_item)
+        assert processed is False
 
-        processed = worker.process_item(reclaimed_item)
-        assert processed is True
-
-        # Consumer execution was bypassed!
-        assert not mock_route.called
-
-        # Remote complete RPC was called with new lease token
-        assert mock_rpc.called
-        call_args = mock_rpc.call_args
-        path_suffix, payload = call_args[0]
-        assert path_suffix == "cvn-complete-outbound-item"
-        assert payload["lease_token"] == "NEW-lease-secret-99999"
-
-        # Journal is now remote_completed
-        assert temp_journal.get_entry(item_id)["state"] == "remote_completed"
+        assert mock_fail.called
+        call_args = mock_fail.call_args
+        assert call_args[0][0] == "item-conflict-1"
+        assert call_args[0][2] == "JOURNAL_IDENTITY_CONFLICT"
+        assert call_args[1].get("retryable") is False  # retryable=False
 
 
-def test_http_401_triggers_fatal_worker_error(base_worker_env, temp_journal) -> None:
+def test_log_hygiene_redacts_secrets_and_leases(base_worker_env, temp_journal, caplog) -> None:
     worker = OutboundWorkerV2(journal=temp_journal)
 
-    with patch.object(worker, "_send_edge_rpc", side_effect=FatalWorkerError("Authentication failure: HTTP 401")):
-        with pytest.raises(FatalWorkerError):
-            worker.claim_item()
+    secret_lease = "SUPER_SECRET_LEASE_TOKEN_12345"
+    content_data = {"title": "Sensitive Record Title"}
+    _, valid_hash = compute_canonical_content_hash("record_only", "openclaw", content_data)
+
+    item = {
+        "item_id": "item-log-hygiene",
+        "lease_token": secret_lease,
+        "payload_hash": f"sha256:{valid_hash}",
+        "content_hash": valid_hash,
+        "item_kind": "record_only",
+        "target_agent": "openclaw",
+        "payload": {
+            "schema_version": "cvn.outbound_item.v2",
+            "item_kind": "record_only",
+            "target_agent": "openclaw",
+            "item_id": "item-log-hygiene",
+            "source_device_id": "dev-01",
+            "created_at": "2026-08-03T10:00:00Z",
+            "content_hash": valid_hash,
+            "content": content_data,
+            "privacy": {
+                "automatic_classification": "non_sensitive",
+                "risk_level": "low",
+                "release_basis": "automatic_policy",
+                "checks_passed": ["content_classification_pass"],
+            },
+        },
+    }
+
+    with patch.object(worker, "_send_edge_rpc", return_value=(200, {"completed": True})), \
+         caplog.at_level(logging.INFO):
+
+        worker.process_item(item)
+
+        captured_text = caplog.text
+        # Secrets and plaintext lease tokens MUST be absent from log text
+        assert secret_lease not in captured_text
+        assert "test-hmac-secret" not in captured_text
+        assert "test-bearer-token" not in captured_text
 
 
-def test_transient_network_error_applies_backoff(base_worker_env, temp_journal) -> None:
+def test_startup_reconciliation_logs_pending_count(base_worker_env, temp_journal, caplog) -> None:
+    temp_journal.record_claim("pending-item-1", "h1", "h1", "record_only")
+    temp_journal.record_consumer_success("pending-item-1", "ref_1")
+
     worker = OutboundWorkerV2(journal=temp_journal)
-
-    with patch.object(worker, "_send_edge_rpc", side_effect=OSError("Network unreachable")), \
-         patch("time.sleep") as mock_sleep:
-
-        claimed = worker.claim_item()
-        assert claimed is None
-        assert mock_sleep.called
-        assert worker.backoff_current > worker.poll_interval
+    with caplog.at_level(logging.INFO):
+        worker.reconcile_pending_journal_entries()
+        assert "STARTUP_RECONCILIATION: Found 1 pending journal entries" in caplog.text

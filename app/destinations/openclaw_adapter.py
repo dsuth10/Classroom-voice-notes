@@ -134,8 +134,14 @@ class OpenClawAdapter:
 
         headers = {
             "Authorization": f"Bearer {self.gateway_token}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
+
+        user_id = str(request.get("user", ""))
+        task_id = user_id.replace("cvn-task:", "") if "cvn-task:" in user_id else str(request.get("task_id", ""))
+        if task_id:
+            headers["Idempotency-Key"] = f"cvn-{task_id}"
+            headers["X-Idempotency-Key"] = f"cvn-{task_id}"
 
         try:
             response = requests.post(

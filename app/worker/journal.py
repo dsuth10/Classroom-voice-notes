@@ -23,6 +23,12 @@ def get_journal_db_path() -> Path:
     return path
 
 
+class JournalIdentityConflictError(Exception):
+    """Raised when re-claiming an existing item_id with a conflicting payload_hash, content_hash, or consumer_kind."""
+
+    pass
+
+
 class WorkerJournal:
     """Local SQLite journal tracking item states: claimed -> consumer_succeeded_pending_remote_complete -> remote_completed (or failed)."""
 
@@ -72,24 +78,49 @@ class WorkerJournal:
         content_hash: str,
         consumer_kind: str,
     ) -> Dict[str, Any]:
-        """Records or updates a claimed item state."""
+        """Records or verifies a claimed item state with immutable identity checking."""
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        p_hash = payload_hash or ""
+        c_hash = content_hash or ""
+        c_kind = consumer_kind or ""
+
         with self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO worker_journal (
-                    item_id, payload_hash, content_hash, consumer_kind, state, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'claimed', ?, ?)
-                ON CONFLICT(item_id) DO UPDATE SET
-                    payload_hash=excluded.payload_hash,
-                    content_hash=excluded.content_hash,
-                    consumer_kind=excluded.consumer_kind,
-                    updated_at=excluded.updated_at
-                WHERE state != 'remote_completed';
-                """,
-                (item_id, payload_hash or "", content_hash or "", consumer_kind or "", now, now),
+            cur = conn.execute(
+                "SELECT payload_hash, content_hash, consumer_kind, state FROM worker_journal WHERE item_id = ?",
+                (item_id,),
             )
-            conn.commit()
+            existing = cur.fetchone()
+            if existing:
+                ex_dict = dict(existing)
+                # Verify immutable identity fields match
+                if (
+                    ex_dict["payload_hash"] != p_hash
+                    or ex_dict["content_hash"] != c_hash
+                    or ex_dict["consumer_kind"] != c_kind
+                ):
+                    logger.error(
+                        f"JOURNAL_IDENTITY_CONFLICT: Item {item_id} re-claimed with mismatching hashes or consumer kind."
+                    )
+                    raise JournalIdentityConflictError(
+                        f"Item {item_id} journal conflict: existing identity ({ex_dict['payload_hash']}, {ex_dict['content_hash']}, {ex_dict['consumer_kind']}) "
+                        f"does not match new claim ({p_hash}, {c_hash}, {c_kind})."
+                    )
+                # Touch updated_at timestamp without modifying state or identity
+                conn.execute(
+                    "UPDATE worker_journal SET updated_at = ? WHERE item_id = ?",
+                    (now, item_id),
+                )
+                conn.commit()
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO worker_journal (
+                        item_id, payload_hash, content_hash, consumer_kind, state, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'claimed', ?, ?);
+                    """,
+                    (item_id, p_hash, c_hash, c_kind, now, now),
+                )
+                conn.commit()
         self._apply_file_permissions()
         return self.get_entry(item_id) or {}
 
@@ -163,7 +194,14 @@ class WorkerJournal:
         Never purges non-terminal entries ('claimed', 'consumer_succeeded_pending_remote_complete').
         """
         if retention_days is None:
-            retention_days = int(os.environ.get("CVN_WORKER_JOURNAL_RETENTION_DAYS", "7"))
+            try:
+                retention_days = int(os.environ.get("CVN_WORKER_JOURNAL_RETENTION_DAYS", "7"))
+            except ValueError:
+                retention_days = 7
+
+        if retention_days < 1 or retention_days > 365:
+            logger.warning(f"Invalid retention days {retention_days}; clamping to 7 days.")
+            retention_days = 7
 
         cutoff_seconds = time.time() - (retention_days * 86400)
         cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff_seconds))

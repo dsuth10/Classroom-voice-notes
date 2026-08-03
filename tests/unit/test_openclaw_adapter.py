@@ -102,7 +102,9 @@ class TestOpenClawAdapter(unittest.TestCase):
             json=req,
             headers={
                 "Authorization": "Bearer test-gateway-token",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "Idempotency-Key": "cvn-CVN-20260710-120000-ABCD",
+                "X-Idempotency-Key": "cvn-CVN-20260710-120000-ABCD",
             },
             timeout=(10.0, 120.0)
         )

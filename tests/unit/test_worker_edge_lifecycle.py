@@ -127,7 +127,7 @@ def test_worker_process_item_return_status() -> None:
     mock_claim = {
         "claimed": True,
         "item_id": "CVNI-20260802-180000-FAIL",
-        "lease_token": "CVNL-LEASE-1",
+        "lease_token": "test_mock_lease_token_12345",
         "payload_hash": "a" * 64,
         "content_hash": "b" * 64,
         "target_agent": "openclaw",

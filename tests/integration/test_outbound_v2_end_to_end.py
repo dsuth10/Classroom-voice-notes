@@ -75,12 +75,35 @@ def test_full_v2_outbound_lifecycle_integration(tmp_path: Path, monkeypatch: pyt
     assert queued_item["status"] == "queued"
     mock_outbox.enqueue.assert_called_once()
 
+    from app.worker.journal import WorkerJournal
+
     # 4. OutboundWorkerV2 Claim & Completion
     worker = OutboundWorkerV2(
         edge_base_url="https://synthetic.supabase.co/functions/v1",
         worker_bearer_token="synthetic-worker-token",
+        worker_hmac_secret="synthetic-hmac-secret",
         worker_id="worker-e2e-1",
+        journal=WorkerJournal(db_path=tmp_path / "e2e_journal.db"),
     )
+
+    _, valid_hash = compute_canonical_content_hash("record_only", "openclaw", draft_dict["content"])
+
+    payload_json = {
+        "schema_version": "cvn.outbound_item.v2",
+        "item_kind": "record_only",
+        "target_agent": "openclaw",
+        "item_id": item_id,
+        "source_device_id": "dev-01",
+        "created_at": "2026-08-03T10:00:00Z",
+        "content_hash": valid_hash,
+        "content": draft_dict["content"],
+        "privacy": {
+            "automatic_classification": "non_sensitive",
+            "risk_level": "low",
+            "release_basis": "automatic_policy",
+            "checks_passed": ["content_classification_pass"],
+        },
+    }
 
     mock_resp_claim = MagicMock()
     mock_resp_claim.read.return_value = json.dumps({
@@ -88,10 +111,10 @@ def test_full_v2_outbound_lifecycle_integration(tmp_path: Path, monkeypatch: pyt
         "item_id": item_id,
         "item_kind": "record_only",
         "target_agent": "openclaw",
-        "lease_token": "CVNL-E2E-LEASE-TOKEN-99",
-        "payload_hash": "a" * 64,
-        "content_hash": "b" * 64,
-        "payload_json": draft_dict,
+        "lease_token": "test_mock_lease_token_e2e_99",
+        "payload_hash": f"sha256:{valid_hash}",
+        "content_hash": valid_hash,
+        "payload_json": payload_json,
     }).encode("utf-8")
     mock_resp_claim.__enter__.return_value = mock_resp_claim
 
@@ -106,7 +129,7 @@ def test_full_v2_outbound_lifecycle_integration(tmp_path: Path, monkeypatch: pyt
     with patch("urllib.request.urlopen", side_effect=[mock_resp_claim, mock_resp_complete]):
         claimed_payload = worker.claim_item()
         assert claimed_payload is not None
-        assert claimed_payload["lease_token"] == "CVNL-E2E-LEASE-TOKEN-99"
+        assert claimed_payload["lease_token"] == "test_mock_lease_token_e2e_99"
 
         success = worker.process_item(claimed_payload)
         assert success is True
