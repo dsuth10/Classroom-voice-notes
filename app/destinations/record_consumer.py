@@ -58,11 +58,13 @@ class RecordConsumer:
 
         self.db = RecordDatabase(db_file)
         self.lock_file = self.export_file.with_suffix(".lock")
+        self._last_export_failed: bool = False
 
         # Initial CSV generation attempt
         try:
             self.regenerate_csv()
         except Exception as exc:
+            self._last_export_failed = True
             log_audit_event(
                 "RECORD_CONSUMER_INIT_EXPORT_PENDING",
                 "record_consumer",
@@ -134,9 +136,11 @@ class RecordConsumer:
                 # Mark all records as exported in SQLite
                 item_ids = [r["item_id"] for r in records if "item_id" in r]
                 self.db.mark_records_exported(item_ids)
+                self._last_export_failed = False
 
                 return self.export_file
             except Exception as e:
+                self._last_export_failed = True
                 if tmp_path.exists():
                     try:
                         tmp_path.unlink()
@@ -161,6 +165,7 @@ class RecordConsumer:
             self.regenerate_csv()
             export_succeeded = True
         except Exception as exc:
+            self._last_export_failed = True
             log_audit_event(
                 "RECORD_EXPORT_PENDING",
                 "record_consumer",
@@ -198,18 +203,25 @@ class RecordConsumer:
             }
 
     def retry_pending_exports(self) -> int:
-        """Attempts to regenerate CSV export for any records in 'pending' status.
+        """Attempts to regenerate CSV export if pending records exist, file is missing, or previous export failed.
 
         Returns:
             Count of records remaining in 'pending' status.
         """
         pending = self.db.get_pending_export_records()
-        if not pending:
+        should_retry = (
+            len(pending) > 0
+            or not self.export_file.exists()
+            or self._last_export_failed
+        )
+
+        if not should_retry:
             return 0
 
         try:
             self.regenerate_csv()
         except Exception as exc:
+            self._last_export_failed = True
             log_audit_event(
                 "RECORD_EXPORT_RETRY_FAILED",
                 "record_consumer",

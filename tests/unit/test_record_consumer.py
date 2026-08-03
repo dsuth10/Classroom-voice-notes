@@ -155,3 +155,28 @@ def test_export_failure_returns_truthful_pending_status_and_retries(
     assert remaining_pending == 0
     assert len(consumer.db.get_pending_export_records()) == 0
     assert export_file.exists()
+
+
+def test_missing_csv_file_triggers_retry_regeneration(tmp_path: Path) -> None:
+    """If CSV file is deleted from disk, retry_pending_exports regenerates it cleanly."""
+    export_file = tmp_path / "records.csv"
+    consumer = RecordConsumer(export_file=export_file)
+    payload = _make_payload("CVNI-MISSING-CSV-01")
+
+    res = consumer.process_record(payload)
+    assert res["status"] == "exported"
+    assert export_file.exists()
+
+    # Delete CSV file manually from disk while DB rows are already marked 'exported'
+    export_file.unlink()
+    assert not export_file.exists()
+
+    # retry_pending_exports detects missing CSV on disk and regenerates snapshot
+    remaining = consumer.retry_pending_exports()
+    assert remaining == 0
+    assert export_file.exists()
+
+    with open(export_file, "r", encoding="utf-8") as f:
+        rows = list(_csv.reader(f))
+    assert len(rows) == 2
+    assert rows[1][0] == "CVNI-MISSING-CSV-01"

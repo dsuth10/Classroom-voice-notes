@@ -124,6 +124,8 @@ def test_concurrent_process_export(tmp_path: Path) -> None:
 
     for proc in processes:
         proc.join(timeout=10.0)
+        assert not proc.is_alive(), f"Process {proc.pid} timed out"
+        assert proc.exitcode == 0, f"Process {proc.pid} exited with code {proc.exitcode}"
 
     # Verify CSV file exists and contains all records
     assert export_file.exists()

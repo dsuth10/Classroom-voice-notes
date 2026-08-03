@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-This document specifies the authoritative schema, field data dictionary, security controls, inter-process locking, backup procedures, retention schedules, and deletion policies for local outbound record storage in Classroom Voice Notes (CVN).
+This document specifies the authoritative schema, field data dictionary, security controls, inter-process locking, schema upgrade migrations, backup procedures, retention schedules, and deletion policies for local outbound record storage in Classroom Voice Notes (CVN).
 
 Local record storage consists of two components:
 1. **Authoritative Database (`outbound_records.db`)**: A versioned SQLite database storing structured records for all completed `record_only` outbound sharing items.
@@ -11,6 +11,10 @@ Local record storage consists of two components:
 ---
 
 ## 2. SQLite Database Schema (`outbound_records`)
+
+### Schema Version History
+- **Version 1**: Initial release schema featuring `source_device` column.
+- **Version 2**: Standardized v2 contract schema renaming `source_device` -> `source_device_id` and adding `export_status` column (`'pending'` or `'exported'`).
 
 | Column Name | SQLite Type | Nullable | Primary Key | Description & Source Field |
 | :--- | :--- | :--- | :--- | :--- |
@@ -38,7 +42,19 @@ Local record storage consists of two components:
 
 ---
 
-## 3. CSV Spreadsheet Structure (`outbound_records.csv`)
+## 3. Schema v1 -> v2 Migration Protocol
+
+When an application instance opens an existing version 1 database:
+1. `_init_db()` checks `schema_migrations` table for max version.
+2. If `version < 2`, a transaction is executed:
+   - `ALTER TABLE outbound_records RENAME COLUMN source_device TO source_device_id` (if present).
+   - `ALTER TABLE outbound_records ADD COLUMN export_status TEXT NOT NULL DEFAULT 'pending'` (if missing).
+   - `INSERT OR IGNORE INTO schema_migrations (version) VALUES (2)` is recorded.
+3. Existing records are preserved and readable immediately under version 2 code.
+
+---
+
+## 4. CSV Spreadsheet Structure (`outbound_records.csv`)
 
 The generated CSV contains a subset of high-level fields suitable for administrative export:
 
@@ -59,12 +75,12 @@ CSV generation acquires an OS-level file lock (`outbound_records.lock` via `msvc
 
 ---
 
-## 4. Operational Lifecycle & Governance
+## 5. Operational Lifecycle & Governance
 
 ### Truthful Status & Standalone Export Retry
 - Database insertion into `outbound_records.db` is performed first inside a SQLite transaction with `export_status = 'pending'`.
 - If CSV export fails (e.g. disk I/O error), `RecordConsumer.process_record()` returns `{"status": "export_pending"}` without rolling back the committed SQLite record.
-- Operative routines can trigger `RecordConsumer.retry_pending_exports()` to process outstanding pending exports.
+- Operative routines trigger `RecordConsumer.retry_pending_exports()` which regenerates the CSV snapshot if any rows are pending, if the CSV file is missing from disk, or if the previous export attempt failed.
 - Once CSV export completes successfully, all included items transition to `export_status = 'exported'`.
 
 ### Retention & Deletion

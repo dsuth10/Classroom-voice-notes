@@ -44,11 +44,91 @@ def _make_valid_v2_payload(
     return payload
 
 
-def test_init_db_creates_schema_v1(temp_db: RecordDatabase) -> None:
+def test_init_db_creates_schema_v2(temp_db: RecordDatabase) -> None:
     assert temp_db.db_path.exists()
     with sqlite3.connect(temp_db.db_path) as conn:
         cursor = conn.execute("SELECT MAX(version) FROM schema_migrations")
-        assert cursor.fetchone()[0] == 1
+        assert cursor.fetchone()[0] == 2
+
+
+def test_upgrade_from_schema_v1_to_v2(tmp_path: Path) -> None:
+    """Existing schema v1 database upgrades seamlessly to v2 while preserving records."""
+    db_path = tmp_path / "legacy_v1_records.db"
+
+    # 1. Create a legacy v1 database manually
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute("INSERT INTO schema_migrations (version) VALUES (1)")
+        conn.execute(
+            """
+            CREATE TABLE outbound_records (
+                item_id TEXT PRIMARY KEY,
+                content_hash TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                source_device TEXT,
+                created_at TEXT NOT NULL,
+                recorded_at TEXT,
+                received_at TEXT,
+                completed_at TEXT NOT NULL DEFAULT (datetime('now')),
+                duration_seconds REAL,
+                title TEXT NOT NULL,
+                summary TEXT,
+                category TEXT,
+                tags_json TEXT,
+                structured_fields_json TEXT,
+                transcript TEXT,
+                classification TEXT,
+                risk_level TEXT,
+                release_basis TEXT,
+                approval_metadata_json TEXT,
+                safe_processing_ref TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO outbound_records (
+                item_id, content_hash, schema_version, source_device, created_at, title
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("CVNI-LEGACY-001", "hash_v1", "cvn.outbound_item.v2", "dev-v1-device", "2026-08-01T12:00:00Z", "Legacy Note")
+        )
+        conn.commit()
+
+    # 2. Instantiate RecordDatabase which executes v1 -> v2 migration
+    db = RecordDatabase(db_path)
+
+    # 3. Assert version 2 recorded in schema_migrations
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.execute("SELECT MAX(version) FROM schema_migrations")
+        assert cursor.fetchone()[0] == 2
+
+        # Assert column source_device_id exists and source_device is renamed/copied
+        cursor = conn.execute("PRAGMA table_info(outbound_records)")
+        cols = [c[1] for c in cursor.fetchall()]
+        assert "source_device_id" in cols
+        assert "export_status" in cols
+
+    # 4. Verify existing record preserved and accessible
+    rec = db.get_record("CVNI-LEGACY-001")
+    assert rec is not None
+    assert rec["item_id"] == "CVNI-LEGACY-001"
+    assert rec["title"] == "Legacy Note"
+    assert rec["source_device_id"] == "dev-v1-device"
+
+    # 5. Insert new v2 record into upgraded DB succeeds
+    payload = _make_valid_v2_payload("CVNI-NEW-002")
+    db.insert_record(payload)
+    new_rec = db.get_record("CVNI-NEW-002")
+    assert new_rec is not None
+    assert new_rec["source_device_id"] == "dev-alpha-123"
 
 
 def test_insert_record_success_maps_v2_contract(temp_db: RecordDatabase) -> None:
@@ -71,7 +151,6 @@ def test_insert_record_success_maps_v2_contract(temp_db: RecordDatabase) -> None
 
 def test_recomputes_content_hash_and_rejects_caller_mismatch(temp_db: RecordDatabase) -> None:
     payload = _make_valid_v2_payload()
-    original_hash = payload["content_hash"]
 
     # Tamper with content while keeping original content_hash
     payload["content"]["title"] = "Tampered Title"
@@ -98,6 +177,18 @@ def test_strict_payload_validation(temp_db: RecordDatabase) -> None:
     p3["item_kind"] = "agent_task"
     with pytest.raises(ValueError, match="Expected 'record_only'"):
         temp_db.insert_record(p3)
+
+    # Missing target_agent
+    p4 = _make_valid_v2_payload()
+    p4["target_agent"] = ""
+    with pytest.raises(ValueError, match="missing valid non-empty target_agent"):
+        temp_db.insert_record(p4)
+
+    # Invalid created_at ISO timestamp
+    p6 = _make_valid_v2_payload()
+    p6["created_at"] = "invalid-timestamp"
+    with pytest.raises(ValueError, match="is not a valid ISO 8601 timestamp"):
+        temp_db.insert_record(p6)
 
 
 def test_idempotent_duplicate_insert_returns_existing(temp_db: RecordDatabase) -> None:

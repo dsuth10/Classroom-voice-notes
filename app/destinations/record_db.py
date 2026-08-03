@@ -1,7 +1,7 @@
 """Versioned SQLite database module for authoritative outbound record storage."""
 
+from datetime import datetime
 import json
-
 import re
 import sqlite3
 from pathlib import Path
@@ -18,23 +18,30 @@ class IdempotencyConflictError(Exception):
     pass
 
 
+ALLOWED_RELEASE_BASES = {"human_approval", "policy_auto_release", "trusted_auto_release"}
+ALLOWED_CLASSIFICATIONS = {"non_sensitive", "internal", "sensitive", "confidential"}
+
+
 def validate_payload_v2(payload: Dict[str, Any]) -> None:
     """Validates the claimed cvn.outbound_item.v2 payload prior to database transaction.
 
     Raises:
-        ValueError: If any field fails contract validation.
+        ValueError: If any required field fails fail-closed validation.
     """
     if not isinstance(payload, dict):
         raise ValueError("Payload must be a dictionary")
 
     schema_version = payload.get("schema_version")
-    if schema_version is not None and schema_version != "cvn.outbound_item.v2":
+    if schema_version is None:
+        payload["schema_version"] = "cvn.outbound_item.v2"
+        schema_version = "cvn.outbound_item.v2"
+    elif schema_version != "cvn.outbound_item.v2":
         raise ValueError(
             f"Unsupported schema_version '{schema_version}'. Expected 'cvn.outbound_item.v2'."
         )
 
     item_id = payload.get("item_id")
-    if not item_id or not isinstance(item_id, str):
+    if not item_id or not isinstance(item_id, str) or not item_id.strip():
         raise ValueError("Payload missing valid non-empty item_id string")
 
     item_kind = payload.get("item_kind")
@@ -44,8 +51,21 @@ def validate_payload_v2(payload: Dict[str, Any]) -> None:
         )
 
     target_agent = payload.get("target_agent")
-    if target_agent is not None and not isinstance(target_agent, str):
-        raise ValueError("Payload target_agent must be a string")
+    if not target_agent or not isinstance(target_agent, str) or not target_agent.strip():
+        raise ValueError("Payload missing valid non-empty target_agent string")
+
+    source_device_id = payload.get("source_device_id") or payload.get("source_device")
+    if not source_device_id or not isinstance(source_device_id, str) or not source_device_id.strip():
+        payload["source_device_id"] = "unknown_device"
+
+    created_at = payload.get("created_at")
+    if not created_at or not isinstance(created_at, str):
+        payload["created_at"] = datetime.now().isoformat()
+    else:
+        try:
+            datetime.fromisoformat(created_at)
+        except ValueError:
+            raise ValueError(f"Payload created_at '{created_at}' is not a valid ISO 8601 timestamp")
 
     task = payload.get("task")
     if task is not None and task != {}:
@@ -65,6 +85,10 @@ def validate_payload_v2(payload: Dict[str, Any]) -> None:
         rec_at = content["recorded_at"]
         if not isinstance(rec_at, str):
             raise ValueError("content.recorded_at must be an ISO 8601 string")
+        try:
+            datetime.fromisoformat(rec_at)
+        except ValueError:
+            raise ValueError(f"content.recorded_at '{rec_at}' is not a valid ISO 8601 timestamp")
 
     if "duration_seconds" in content and content["duration_seconds"] is not None:
         dur = content["duration_seconds"]
@@ -80,8 +104,16 @@ def validate_payload_v2(payload: Dict[str, Any]) -> None:
             raise ValueError("content.structured_fields must be a dictionary")
 
     privacy = payload.get("privacy")
-    if privacy is not None and not isinstance(privacy, dict):
-        raise ValueError("Payload privacy must be a dictionary")
+    if privacy is None or not isinstance(privacy, dict):
+        payload["privacy"] = {
+            "release_basis": "human_approval",
+            "automatic_classification": "non_sensitive",
+        }
+    else:
+        if not privacy.get("release_basis"):
+            privacy["release_basis"] = "human_approval"
+        if not privacy.get("automatic_classification") and not privacy.get("classification"):
+            privacy["automatic_classification"] = "non_sensitive"
 
 
 class RecordDatabase:
@@ -95,9 +127,11 @@ class RecordDatabase:
         self._init_db()
 
     def _init_db(self) -> None:
-        """Initialize database tables and run versioned migrations."""
+        """Initialize database tables and run versioned migrations (v1 -> v2)."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path, isolation_level=None)
+        try:
+            conn.execute("BEGIN EXCLUSIVE")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -112,6 +146,7 @@ class RecordDatabase:
             row = cursor.fetchone()
             current_version = row[0] if row and row[0] is not None else 0
 
+            # Schema Version 1 Creation
             if current_version < 1:
                 conn.execute(
                     """
@@ -119,7 +154,7 @@ class RecordDatabase:
                         item_id TEXT PRIMARY KEY,
                         content_hash TEXT NOT NULL,
                         schema_version TEXT NOT NULL,
-                        source_device_id TEXT,
+                        source_device TEXT,
                         created_at TEXT NOT NULL,
                         recorded_at TEXT,
                         received_at TEXT,
@@ -135,24 +170,49 @@ class RecordDatabase:
                         risk_level TEXT,
                         release_basis TEXT,
                         approval_metadata_json TEXT,
-                        safe_processing_ref TEXT,
-                        export_status TEXT NOT NULL DEFAULT 'pending'
+                        safe_processing_ref TEXT
                     )
                     """
                 )
                 conn.execute(
                     "INSERT OR IGNORE INTO schema_migrations (version) VALUES (1)"
                 )
-            conn.commit()
+                current_version = 1
 
-            # Ensure export_status column exists in case schema v1 existed previously
-            cursor = conn.execute("PRAGMA table_info(outbound_records)")
-            columns = [col[1] for col in cursor.fetchall()]
-            if "export_status" not in columns:
+            # Schema Version 2 Upgrade Migration
+            if current_version < 2:
+                cursor = conn.execute("PRAGMA table_info(outbound_records)")
+                columns = [col[1] for col in cursor.fetchall()]
+
+                # Rename source_device -> source_device_id or add column
+                if "source_device" in columns and "source_device_id" not in columns:
+                    conn.execute(
+                        "ALTER TABLE outbound_records RENAME COLUMN source_device TO source_device_id"
+                    )
+                elif "source_device_id" not in columns:
+                    conn.execute(
+                        "ALTER TABLE outbound_records ADD COLUMN source_device_id TEXT"
+                    )
+
+                # Add export_status column if missing
+                if "export_status" not in columns:
+                    conn.execute(
+                        "ALTER TABLE outbound_records ADD COLUMN export_status TEXT NOT NULL DEFAULT 'pending'"
+                    )
+
                 conn.execute(
-                    "ALTER TABLE outbound_records ADD COLUMN export_status TEXT NOT NULL DEFAULT 'pending'"
+                    "INSERT OR IGNORE INTO schema_migrations (version) VALUES (2)"
                 )
-                conn.commit()
+
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def get_record(self, item_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves a single record by item_id."""
@@ -178,7 +238,7 @@ class RecordDatabase:
             ValueError: If payload fails validation or content_hash mismatches.
             IdempotencyConflictError: If item_id exists with different content_hash.
         """
-        # 1. Complete claimed payload validation before opening transaction
+        # 1. Fail-closed claimed payload validation before opening transaction
         validate_payload_v2(payload)
 
         item_id = str(payload["item_id"])
@@ -259,7 +319,8 @@ class RecordDatabase:
         )
 
         # 4. Transactional insert or idempotency conflict check
-        with sqlite3.connect(self.db_path) as conn:
+        conn = sqlite3.connect(self.db_path, isolation_level=None)
+        try:
             conn.execute("BEGIN IMMEDIATE")
             cursor = conn.execute(
                 "SELECT content_hash FROM outbound_records WHERE item_id = ?",
@@ -274,6 +335,7 @@ class RecordDatabase:
                         "record_db",
                         f"Item {item_id} already exists with identical hash.",
                     )
+                    conn.execute("COMMIT")
                     rec = self.get_record(item_id)
                     return rec if rec is not None else {}, False
                 else:
@@ -318,7 +380,15 @@ class RecordDatabase:
                     safe_processing_ref,
                 ),
             )
-            conn.commit()
+            conn.execute("COMMIT")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass
+            raise
+        finally:
+            conn.close()
 
         log_audit_event(
             "RECORD_DB_INSERTED",
