@@ -1,4 +1,5 @@
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Tuple
 from PySide6.QtCore import QObject, QTimer, Slot
@@ -21,8 +22,8 @@ class ReviewManager(QObject):
         """Starts periodic scanning of the Review Queue (default: every 60 seconds)."""
         self.timer.start(interval_ms)
         log_audit_event("REVIEW_MANAGER_START", "session", f"Review manager started, scanning every {interval_ms/1000}s")
-        # Run an initial scan immediately
-        self.scan_queue()
+        # Run the initial scan in a background thread to avoid blocking the UI on startup
+        threading.Thread(target=self.scan_queue, daemon=True).start()
 
     def stop(self) -> None:
         self.timer.stop()

@@ -52,14 +52,20 @@ def main() -> None:
     indicator.rebuild_index_requested.connect(controller.rebuild_student_index)
     indicator.retry_outbox_requested.connect(lambda: controller._retry_pending_outbox(manual=True))
     
-    # Set initial state and position indicator in top-right of screen
+    # Find the target screen (prefer UGREEN-UHD, fall back to primary)
+    target_screen = app.primaryScreen()
+    for s in app.screens():
+        if "UGREEN" in s.name():
+            target_screen = s
+            break
+
+    # Set initial state and position indicator in top-right of target screen
     indicator.set_state(controller.state)
-    screen = app.primaryScreen()
-    if screen:
-        screen_geom = screen.geometry()
+    if target_screen:
+        avail = target_screen.availableGeometry()
         margin = 20
-        x = screen_geom.width() - indicator.width() - margin
-        y = margin
+        x = avail.x() + avail.width() - indicator.width() - margin
+        y = avail.y() + margin
         indicator.move(x, y)
     # Don't quit when Settings window closes — the floating indicator owns the app lifetime
     app.setQuitOnLastWindowClosed(False)
@@ -71,6 +77,12 @@ def main() -> None:
 
     # 5. Open the Settings Main Window GUI, passing the controller
     window = MainWindow(settings_manager, controller)
+    # Centre on target screen
+    if target_screen:
+        avail = target_screen.availableGeometry()
+        x = avail.x() + (avail.width() - 550) // 2
+        y = avail.y() + (avail.height() - 650) // 2
+        window.move(x, y)
     window.show()
     window.raise_()
     window.activateWindow()
