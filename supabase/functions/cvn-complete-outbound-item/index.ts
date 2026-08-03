@@ -98,7 +98,11 @@ serve(async (req: Request) => {
     );
   }
 
-  if (body.result_json && JSON.stringify(body.result_json).length > 65536) {
+  if (
+    body.result_json &&
+    new TextEncoder().encode(JSON.stringify(body.result_json)).byteLength >
+      65536
+  ) {
     return new Response(
       JSON.stringify({
         error: "result_payload_too_large",

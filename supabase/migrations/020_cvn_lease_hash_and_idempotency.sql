@@ -114,17 +114,7 @@ BEGIN
             'status', 'submitted'
         );
     EXCEPTION WHEN unique_violation THEN
-        -- Check if nonce was replayed
-        SELECT nonce INTO v_existing_nonce
-        FROM public.cvn_outbound_items
-        WHERE source_device_id = p_source_device_id AND nonce = p_nonce;
-
-        IF v_existing_nonce IS NOT NULL THEN
-            RAISE EXCEPTION 'nonce_replayed: %', p_nonce
-                USING ERRCODE = '23505';
-        END IF;
-
-        -- Check idempotency key
+        -- 1. Check idempotency key first (exact replay returns idempotent success; mismatch raises idempotency_conflict)
         SELECT item_id, content_hash, status INTO v_existing_id, v_existing_content_hash, v_existing_status
         FROM public.cvn_outbound_items
         WHERE idempotency_key = p_idempotency_key;
@@ -141,6 +131,16 @@ BEGIN
                 RAISE EXCEPTION 'idempotency_conflict: key % already used for item %', p_idempotency_key, v_existing_id
                     USING ERRCODE = '23505';
             END IF;
+        END IF;
+
+        -- 2. Check if nonce was replayed
+        SELECT nonce INTO v_existing_nonce
+        FROM public.cvn_outbound_items
+        WHERE source_device_id = p_source_device_id AND nonce = p_nonce;
+
+        IF v_existing_nonce IS NOT NULL THEN
+            RAISE EXCEPTION 'nonce_replayed: %', p_nonce
+                USING ERRCODE = '23505';
         END IF;
 
         RAISE EXCEPTION 'unique_violation_conflict: duplicate key or item_id'
@@ -257,8 +257,8 @@ BEGIN
         RAISE EXCEPTION 'missing_content_hash: content_hash is required' USING ERRCODE = '22023';
     END IF;
 
-    -- Payload size and reference bounds
-    IF p_result_json IS NOT NULL AND length(p_result_json::text) > 65536 THEN
+    -- Payload size and reference bounds (byte-based 64 KB limit)
+    IF p_result_json IS NOT NULL AND octet_length(p_result_json::text) > 65536 THEN
         RAISE EXCEPTION 'result_payload_too_large: result_json size exceeds 64 KB limit' USING ERRCODE = '22023';
     END IF;
     IF p_result_reference IS NOT NULL AND length(p_result_reference) > 256 THEN
