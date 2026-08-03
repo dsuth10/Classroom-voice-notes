@@ -1,14 +1,18 @@
 """Record Consumer - Handles record_only outbound items for export/spreadsheet population."""
 
 import csv
-import json
-import sqlite3
+import os
 from pathlib import Path
 import re
+import tempfile
+import threading
 from typing import Any, Dict, Optional
 
 from app.audit.audit_logger import log_audit_event
+from app.destinations.record_db import RecordDatabase
 from app.utils.paths import get_app_data_dir
+
+_export_lock = threading.Lock()
 
 
 def sanitize_csv_field(val: Any) -> str:
@@ -37,138 +41,136 @@ def sanitize_csv_field(val: Any) -> str:
 class RecordConsumer:
     """Consumer for record_only outbound items.
 
-    Populates structured records into export storage idempotently without
-    executing agent instructions.
-
-    Idempotency is guaranteed by a SQLite sidecar index. The SQLite INSERT uses
-    INSERT OR IGNORE with a UNIQUE item_id constraint, so concurrent writers
-    cannot produce duplicate rows. A crash between index insert and CSV append
-    leaves an orphaned index row; on re-delivery the row is skipped as duplicate.
+    Populates structured records into SQLite database transactionally and
+    regenerates CSV export atomically from a consistent database snapshot.
     """
 
-    def __init__(self, export_file: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        export_file: Optional[Path] = None,
+        db_file: Optional[Path] = None,
+    ) -> None:
         if export_file is None:
             self.export_file = get_app_data_dir() / "outbound_records.csv"
         else:
             self.export_file = export_file
-        self._index_file = self.export_file.with_suffix(".db")
-        self._init_export_file()
-        self._init_index()
 
-    def _init_export_file(self) -> None:
-        self.export_file.parent.mkdir(parents=True, exist_ok=True)
-        if not self.export_file.exists():
-            with open(self.export_file, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "item_id",
-                    "created_at",
-                    "title",
-                    "category",
-                    "summary",
-                    "tags",
-                    "structured_fields",
-                    "release_basis",
-                ])
+        if db_file is None:
+            db_file = self.export_file.with_suffix(".db")
 
-    def _init_index(self) -> None:
-        """Create the SQLite sidecar index for idempotency checking."""
-        with sqlite3.connect(self._index_file) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS exported_items (
-                    item_id TEXT PRIMARY KEY,
-                    exported_at TEXT NOT NULL DEFAULT (datetime('now'))
-                )
-                """
-            )
-            conn.commit()
+        self.db = RecordDatabase(db_file)
+        self.regenerate_csv()
 
     def is_already_processed(self, item_id: str) -> bool:
-        """Returns True if item_id is in the SQLite index (idempotency guard)."""
-        with sqlite3.connect(self._index_file) as conn:
-            cursor = conn.execute(
-                "SELECT 1 FROM exported_items WHERE item_id = ? LIMIT 1", (item_id,)
-            )
-            return cursor.fetchone() is not None
+        """Returns True if item_id exists in the authoritative SQLite store."""
+        return self.db.get_record(item_id) is not None
 
-    def _mark_indexed(self, item_id: str) -> bool:
-        """Atomically inserts item_id into the index. Returns False if already present."""
-        with sqlite3.connect(self._index_file) as conn:
-            cursor = conn.execute(
-                "INSERT OR IGNORE INTO exported_items (item_id) VALUES (?)", (item_id,)
+    def regenerate_csv(self) -> Path:
+        """Atomically regenerates the CSV spreadsheet export from SQLite."""
+        with _export_lock:
+            records = self.db.get_all_records()
+            temp_dir = self.export_file.parent
+            temp_dir.mkdir(parents=True, exist_ok=True)
+
+            fd, tmp_path_str = tempfile.mkstemp(
+                dir=temp_dir, prefix="outbound_records_", suffix=".tmp"
             )
-            conn.commit()
-            return cursor.rowcount == 1
+            tmp_path = Path(tmp_path_str)
+            try:
+                with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow([
+                        "item_id",
+                        "created_at",
+                        "title",
+                        "category",
+                        "summary",
+                        "tags",
+                        "structured_fields",
+                        "release_basis",
+                    ])
+                    for r in records:
+                        item_id_clean = sanitize_csv_field(r.get("item_id", ""))
+                        created_at_clean = sanitize_csv_field(
+                            r.get("created_at", "")
+                        )
+                        title_clean = sanitize_csv_field(r.get("title", ""))
+                        category_clean = sanitize_csv_field(
+                            r.get("category", "")
+                        )
+                        summary_clean = sanitize_csv_field(r.get("summary", ""))
+                        tags_clean = sanitize_csv_field(
+                            r.get("tags_json") or "[]"
+                        )
+                        sf_clean = sanitize_csv_field(
+                            r.get("structured_fields_json") or "{}"
+                        )
+                        release_basis_clean = sanitize_csv_field(
+                            r.get("release_basis", "")
+                        )
+                        writer.writerow([
+                            item_id_clean,
+                            created_at_clean,
+                            title_clean,
+                            category_clean,
+                            summary_clean,
+                            tags_clean,
+                            sf_clean,
+                            release_basis_clean,
+                        ])
+                    f.flush()
+                    os.fsync(f.fileno())
+
+                os.replace(tmp_path, self.export_file)
+                return self.export_file
+            except Exception as e:
+                if tmp_path.exists():
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
+                raise e
 
     def process_record(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        item_id = payload.get("item_id", "")
-        item_kind = payload.get("item_kind", "")
+        """Transactionally persists record to SQLite and updates CSV export.
 
-        if item_kind != "record_only":
-            raise ValueError(
-                f"RecordConsumer cannot process item_kind '{item_kind}'"
+        Raises:
+            ValueError: If payload fails validation.
+            IdempotencyConflictError: If payload has conflicting content_hash for item_id.
+        """
+        # Validate and insert record in single transaction inside SQLite DB
+        record, is_new = self.db.insert_record(payload)
+        item_id = payload["item_id"]
+
+        # Attempt CSV export regeneration (Task 15: Export error does not undo durable record)
+        try:
+            self.regenerate_csv()
+        except Exception as exc:
+            log_audit_event(
+                "RECORD_EXPORT_FAILED",
+                "record_consumer",
+                f"CSV generation failed for item {item_id}: {exc}",
             )
 
-        if payload.get("task") is not None:
-            raise ValueError(
-                "record_only payload cannot contain task instructions"
+        if is_new:
+            log_audit_event(
+                "RECORD_CONSUMER_EXPORTED",
+                "record_consumer",
+                f"Item {item_id} persisted to SQLite and exported.",
             )
-
-        # Atomic idempotency check via SQLite INSERT OR IGNORE
-        if not self._mark_indexed(item_id):
+            return {
+                "status": "exported",
+                "item_id": item_id,
+                "export_row_id": item_id,
+            }
+        else:
             log_audit_event(
                 "RECORD_CONSUMER_DUPLICATE",
                 "record_consumer",
-                f"Item {item_id} already exported (index duplicate).",
+                f"Item {item_id} already persisted (duplicate skipped).",
             )
             return {
                 "status": "duplicate_skipped",
                 "item_id": item_id,
                 "export_row_id": item_id,
             }
-
-        content = payload.get("content", {})
-        privacy = payload.get("privacy", {})
-
-        title = sanitize_csv_field(content.get("title", ""))
-        category = sanitize_csv_field(content.get("category", ""))
-        summary = sanitize_csv_field(content.get("summary", ""))
-
-        tags_raw = content.get("tags", [])
-        tags_sorted = sorted(tags_raw) if isinstance(tags_raw, list) else []
-        tags_str = sanitize_csv_field(json.dumps(tags_sorted))
-
-        sf_raw = content.get("structured_fields", {})
-        sf_sorted = (
-            dict(sorted(sf_raw.items())) if isinstance(sf_raw, dict) else {}
-        )
-        sf_str = sanitize_csv_field(json.dumps(sf_sorted))
-
-        release_basis = sanitize_csv_field(privacy.get("release_basis", ""))
-        created_at = sanitize_csv_field(payload.get("created_at", ""))
-        item_id_clean = sanitize_csv_field(item_id)
-
-        with open(self.export_file, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                item_id_clean,
-                created_at,
-                title,
-                category,
-                summary,
-                tags_str,
-                sf_str,
-                release_basis,
-            ])
-
-        log_audit_event(
-            "RECORD_CONSUMER_EXPORTED",
-            "record_consumer",
-            f"Item {item_id} exported to CSV.",
-        )
-        return {
-            "status": "exported",
-            "item_id": item_id,
-            "export_row_id": item_id,
-        }
