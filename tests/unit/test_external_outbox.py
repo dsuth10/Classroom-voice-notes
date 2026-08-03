@@ -78,14 +78,14 @@ def test_mark_duplicate_409(outbox: ExternalOutbox) -> None:
     outbox.mark_duplicate(local_id, "duplicate_idempotency_key")
     
     stats = outbox.get_stats()
-    assert stats["sent"] == 1
+    assert stats["conflict"] == 1
     
     # Check database content directly
     with sqlite3.connect(outbox.db_path) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM outbox WHERE local_id = ?", (local_id,)).fetchone()
-        assert row["status"] == "sent"
-        assert "Duplicate conflict" in row["last_error"]
+        assert row["status"] == "conflict"
+        assert "Submission conflict" in row["last_error"]
         assert row["next_retry_at"] is None
 
 

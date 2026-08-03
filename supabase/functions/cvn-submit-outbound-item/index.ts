@@ -333,9 +333,12 @@ serve(async (req: Request) => {
 
   if (error) {
     if (error.code === "23505") {
+      const isConflict = error.message?.includes("idempotency_conflict");
       return new Response(
         JSON.stringify({
-          error: "duplicate_idempotency_key",
+          error: isConflict
+            ? "idempotency_conflict"
+            : "duplicate_idempotency_key",
           message: error.message,
         }),
         {

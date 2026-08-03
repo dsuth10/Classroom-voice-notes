@@ -312,22 +312,21 @@ class ExternalOutbox:
             conn.commit()
 
     def mark_duplicate(self, local_id: int, error_type: str) -> None:
-        """Handles a 409 conflict response (e.g. duplicate idempotency or nonce).
+        """Handles a 409 conflict response (e.g. idempotency conflict or nonce replay).
         
-        Since the server already has the record, we treat this as a successful sent.
+        Per Step 7 rules, 409 is a submission conflict, not a successful submission.
         """
-        now_str = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 UPDATE outbox
-                SET status = 'sent', sent_at = ?, last_error = ?, next_retry_at = NULL
+                SET status = 'conflict', last_error = ?, next_retry_at = NULL
                 WHERE local_id = ?
                 """,
-                (now_str, f"Duplicate conflict (409): {error_type}", local_id)
+                (f"Submission conflict (409): {error_type}", local_id)
             )
             conn.commit()
-            log_audit_event("OUTBOX_DUPLICATE_RESOLVED", "outbox", f"Task local_id={local_id} marked as sent due to 409 collision ({error_type})")
+            log_audit_event("OUTBOX_SUBMISSION_CONFLICT", "outbox", f"Task local_id={local_id} marked as conflict due to 409 ({error_type})")
 
     def get_pending(self) -> List[Dict[str, Any]]:
         """Returns all outbox records that are currently 'pending' and due for retry."""
@@ -400,7 +399,7 @@ class ExternalOutbox:
         """Returns the counts of messages in each status."""
         stats = {
             "pending": 0, "sending": 0, "sent": 0, "failed": 0, 
-            "dead_letter": 0, "archived": 0, "completed": 0, "processing": 0
+            "dead_letter": 0, "archived": 0, "completed": 0, "processing": 0, "conflict": 0
         }
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("SELECT status, COUNT(*) FROM outbox GROUP BY status")

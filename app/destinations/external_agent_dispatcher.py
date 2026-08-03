@@ -189,21 +189,16 @@ class ExternalAgentDispatcher:
                 return True
             elif response.status_code == 409:
                 self.outbox.mark_duplicate(local_id, response.text)
-                self._update_note_frontmatter(Path(note_path), {
-                    "status": "sent",
-                    "task_id": payload["task_id"],
-                    "agent_target": target_agent,
-                    "submitted_at": datetime.now().astimezone().isoformat()
-                })
+                self._update_note_frontmatter(Path(note_path), {"status": "dispatch_failed"})
                 self._update_note_result_block(
                     file_path=Path(note_path),
-                    status="sent",
+                    status="dispatch_failed",
                     agent=target_agent,
                     task_id=payload["task_id"],
                     timestamp_str=datetime.now().astimezone().isoformat(),
-                    result_summary="Task submitted to broker (duplicate collision resolved)."
+                    result_summary=f"Submission failed due to server 409 conflict: {response.text}"
                 )
-                return True
+                return False
             else:
                 error_msg = f"HTTP {response.status_code}: {response.text}"
                 self.outbox.mark_failed(local_id, error_msg)
@@ -300,7 +295,6 @@ class ExternalAgentDispatcher:
                     sent_count += 1
                 elif response.status_code == 409:
                     self.outbox.mark_duplicate(local_id, response.text)
-                    sent_count += 1
                 else:
                     self.outbox.mark_failed(local_id, f"HTTP {response.status_code}: {response.text}")
             except Exception as e:
