@@ -40,26 +40,29 @@ def test_openclaw_adapter_rejects_hermes_target_agent() -> None:
         adapter.validate_task(hermes_task)
 
 
+from app.destinations.outbound_payload_builder import build_outbound_payload_v2
+
+
 def test_record_consumer_v2_export(tmp_path: Path) -> None:
     export_file = tmp_path / "outbound_records.csv"
     consumer = RecordConsumer(export_file=export_file)
 
-    payload = {
-        "schema_version": "cvn.outbound_item.v2",
-        "item_id": "CVNI-REC-200",
-        "item_kind": "record_only",
-        "target_agent": "openclaw",
-        "created_at": "2026-08-01T12:00:00Z",
-        "content": {
+    payload, _, _ = build_outbound_payload_v2(
+        item_id="CVNI-REC-200",
+        source_device_id="dev-alpha-123",
+        item_kind="record_only",
+        target_agent="openclaw",
+        content={
             "title": "Science Lesson Record",
             "summary": "Photosynthesis discussion",
             "category": "science_note",
             "tags": ["biology", "year5"],
             "structured_fields": {"unit": "plants"},
         },
-        "privacy": {"release_basis": "human_approval"},
-        "task": None,
-    }
+        automatic_classification="non_sensitive",
+        risk_level="low",
+        release_basis="human_approval",
+    )
 
     res = consumer.process_record(payload)
     assert res["status"] == "exported"

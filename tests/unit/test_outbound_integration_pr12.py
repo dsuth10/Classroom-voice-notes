@@ -74,16 +74,24 @@ def test_pr12_trusted_high_risk_pauses_for_review(tmp_path: Path) -> None:
     assert awaiting[0]["status"] == "awaiting_review"
 
 
+from app.destinations.outbound_payload_builder import build_outbound_payload_v2
+
+
 def test_pr12_record_consumer_idempotency_recovery(tmp_path: Path) -> None:
     """RecordConsumer sqlite sidecar index ensures idempotent re-delivery without row duplication."""
     csv_file = tmp_path / "records.csv"
     consumer = RecordConsumer(export_file=csv_file)
 
-    payload = {
-        "item_id": "CVNI-20260801-999999-IDEM",
-        "item_kind": "record_only",
-        "content": {"title": "Math Note", "summary": "Addition lesson"},
-    }
+    payload, _, _ = build_outbound_payload_v2(
+        item_id="CVNI-20260801-999999-IDEM",
+        source_device_id="device-synthetic-01",
+        item_kind="record_only",
+        target_agent="openclaw",
+        content={"title": "Math Note", "summary": "Addition lesson"},
+        automatic_classification="non_sensitive",
+        risk_level="low",
+        release_basis="human_approval",
+    )
 
     res1 = consumer.process_record(payload)
     assert res1["status"] == "exported"

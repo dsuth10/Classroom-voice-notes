@@ -23,26 +23,29 @@ def test_sanitize_csv_field_control_characters() -> None:
     assert cleaned == "CleanTextWithControls"
 
 
+from app.destinations.outbound_payload_builder import build_outbound_payload_v2
+
+
 def test_record_consumer_sanitizes_export_fields(tmp_path: Path) -> None:
     export_path = tmp_path / "sanitized_export.csv"
     consumer = RecordConsumer(export_file=export_path)
 
-    payload = {
-        "schema_version": "cvn.outbound_item.v2",
-        "item_id": "=CVNI-EXPORT-1",
-        "item_kind": "record_only",
-        "target_agent": "openclaw",
-        "created_at": "2026-08-01T12:00:00Z",
-        "content": {
+    payload, _, _ = build_outbound_payload_v2(
+        item_id="=CVNI-EXPORT-1",
+        source_device_id="dev-alpha-123",
+        item_kind="record_only",
+        target_agent="openclaw",
+        content={
             "title": "=SUM(1+1)",
             "summary": "+Command injection",
             "category": "-category",
             "tags": ["maths", "algebra"],
             "structured_fields": {"b_key": "val2", "a_key": "val1"},
         },
-        "privacy": {"release_basis": "human_approval"},
-        "task": None,
-    }
+        automatic_classification="non_sensitive",
+        risk_level="low",
+        release_basis="human_approval",
+    )
 
     result = consumer.process_record(payload)
     assert result["status"] == "exported"

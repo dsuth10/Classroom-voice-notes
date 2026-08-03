@@ -12,18 +12,53 @@ from app.destinations.canonical_json import compute_canonical_content_hash
 from app.utils.paths import get_app_data_dir
 
 
+import math
+
 class IdempotencyConflictError(Exception):
     """Raised when an item_id already exists with a different content_hash."""
 
     pass
 
 
-ALLOWED_RELEASE_BASES = {"human_approval", "policy_auto_release", "trusted_auto_release"}
-ALLOWED_CLASSIFICATIONS = {"non_sensitive", "internal", "sensitive", "confidential"}
+ALLOWED_RELEASE_BASES = {
+    "automatic_policy",
+    "human_approval",
+    "trusted_mode",
+}
+
+ALLOWED_CLASSIFICATIONS = {
+    "non_sensitive",
+    "sensitive_pii",
+    "safeguarding",
+    "medical",
+    "sensitive",
+}
+
+ALLOWED_RISK_LEVELS = {"low", "medium", "high"}
+ALLOWED_TARGET_AGENTS = {"openclaw"}
+
+
+def _require_aware_iso8601(value: Any, field_name: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a timezone-aware ISO 8601 timestamp")
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_name} must be a timezone-aware ISO 8601 timestamp"
+        ) from exc
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field_name} must include a timezone offset")
+
+    return parsed
 
 
 def validate_payload_v2(payload: Dict[str, Any]) -> None:
     """Validates the claimed cvn.outbound_item.v2 payload prior to database transaction.
+
+    Must be pure and fail-closed. Does not mutate the payload dict.
 
     Raises:
         ValueError: If any required field fails fail-closed validation.
@@ -32,10 +67,7 @@ def validate_payload_v2(payload: Dict[str, Any]) -> None:
         raise ValueError("Payload must be a dictionary")
 
     schema_version = payload.get("schema_version")
-    if schema_version is None:
-        payload["schema_version"] = "cvn.outbound_item.v2"
-        schema_version = "cvn.outbound_item.v2"
-    elif schema_version != "cvn.outbound_item.v2":
+    if schema_version != "cvn.outbound_item.v2":
         raise ValueError(
             f"Unsupported schema_version '{schema_version}'. Expected 'cvn.outbound_item.v2'."
         )
@@ -51,69 +83,105 @@ def validate_payload_v2(payload: Dict[str, Any]) -> None:
         )
 
     target_agent = payload.get("target_agent")
-    if not target_agent or not isinstance(target_agent, str) or not target_agent.strip():
-        raise ValueError("Payload missing valid non-empty target_agent string")
+    if target_agent not in ALLOWED_TARGET_AGENTS:
+        raise ValueError(f"Payload target_agent '{target_agent}' must be in {ALLOWED_TARGET_AGENTS}")
 
-    source_device_id = payload.get("source_device_id") or payload.get("source_device")
-    if not source_device_id or not isinstance(source_device_id, str) or not source_device_id.strip():
-        payload["source_device_id"] = "unknown_device"
+    source_device_id = payload.get("source_device_id")
+    if not source_device_id or not isinstance(source_device_id, str) or not source_device_id.strip() or source_device_id == "unknown_device":
+        raise ValueError("Payload missing valid non-empty source_device_id string")
 
     created_at = payload.get("created_at")
-    if not created_at or not isinstance(created_at, str):
-        payload["created_at"] = datetime.now().isoformat()
-    else:
-        try:
-            datetime.fromisoformat(created_at)
-        except ValueError:
-            raise ValueError(f"Payload created_at '{created_at}' is not a valid ISO 8601 timestamp")
+    _require_aware_iso8601(created_at, "created_at")
 
-    task = payload.get("task")
-    if task is not None and task != {}:
-        raise ValueError(
-            "record_only payload cannot contain task instructions"
-        )
+    caller_hash = payload.get("content_hash")
+    if not isinstance(caller_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", caller_hash):
+        raise ValueError("content_hash must be a lowercase 64-character SHA-256 value")
 
     content = payload.get("content")
     if not isinstance(content, dict):
         raise ValueError("Payload content must be a dictionary")
 
+    privacy = payload.get("privacy")
+    if not isinstance(privacy, dict):
+        raise ValueError("Payload privacy must be a dictionary")
+
+    task = payload.get("task")
+    if task is not None and task != {}:
+        raise ValueError("record_only payload cannot contain task instructions")
+
+    # Content validation
     title = content.get("title")
     if title is None or not isinstance(title, str) or not title.strip():
         raise ValueError("Payload content.title must be a non-empty string")
 
+    if "summary" in content and content["summary"] is not None:
+        if not isinstance(content["summary"], str):
+            raise ValueError("content.summary must be a string")
+
+    if "category" in content and content["category"] is not None:
+        if not isinstance(content["category"], str):
+            raise ValueError("content.category must be a string")
+
     if "recorded_at" in content and content["recorded_at"] is not None:
-        rec_at = content["recorded_at"]
-        if not isinstance(rec_at, str):
-            raise ValueError("content.recorded_at must be an ISO 8601 string")
-        try:
-            datetime.fromisoformat(rec_at)
-        except ValueError:
-            raise ValueError(f"content.recorded_at '{rec_at}' is not a valid ISO 8601 timestamp")
+        _require_aware_iso8601(content["recorded_at"], "content.recorded_at")
 
     if "duration_seconds" in content and content["duration_seconds"] is not None:
         dur = content["duration_seconds"]
-        if not isinstance(dur, (int, float)) or dur < 0:
+        if isinstance(dur, bool) or not isinstance(dur, (int, float)):
             raise ValueError("content.duration_seconds must be a non-negative number")
+        if not math.isfinite(dur) or dur < 0:
+            raise ValueError("content.duration_seconds must be finite and non-negative")
 
     if "tags" in content and content["tags"] is not None:
-        if not isinstance(content["tags"], list):
+        tags = content["tags"]
+        if not isinstance(tags, list):
             raise ValueError("content.tags must be a list")
+        if not all(isinstance(t, str) for t in tags):
+            raise ValueError("content.tags entries must be strings")
 
     if "structured_fields" in content and content["structured_fields"] is not None:
-        if not isinstance(content["structured_fields"], dict):
+        sf = content["structured_fields"]
+        if not isinstance(sf, dict):
             raise ValueError("content.structured_fields must be a dictionary")
+        if not all(isinstance(k, str) for k in sf.keys()):
+            raise ValueError("content.structured_fields keys must be strings")
 
-    privacy = payload.get("privacy")
-    if privacy is None or not isinstance(privacy, dict):
-        payload["privacy"] = {
-            "release_basis": "human_approval",
-            "automatic_classification": "non_sensitive",
-        }
-    else:
-        if not privacy.get("release_basis"):
-            privacy["release_basis"] = "human_approval"
-        if not privacy.get("automatic_classification") and not privacy.get("classification"):
-            privacy["automatic_classification"] = "non_sensitive"
+    if "transcript" in content and content["transcript"] is not None:
+        if not isinstance(content["transcript"], str):
+            raise ValueError("content.transcript must be a string")
+
+    # Privacy validation
+    auto_class = privacy.get("automatic_classification")
+    if auto_class not in ALLOWED_CLASSIFICATIONS:
+        raise ValueError(f"privacy.automatic_classification '{auto_class}' must be in {ALLOWED_CLASSIFICATIONS}")
+
+    risk = privacy.get("risk_level")
+    if risk not in ALLOWED_RISK_LEVELS:
+        raise ValueError(f"privacy.risk_level '{risk}' must be in {ALLOWED_RISK_LEVELS}")
+
+    rel_basis = privacy.get("release_basis")
+    if rel_basis not in ALLOWED_RELEASE_BASES:
+        raise ValueError(f"privacy.release_basis '{rel_basis}' must be in {ALLOWED_RELEASE_BASES}")
+
+    if rel_basis in ("human_approval", "trusted_mode"):
+        approval = privacy.get("approval")
+        if not isinstance(approval, dict):
+            raise ValueError(f"privacy.approval dictionary required for release_basis '{rel_basis}'")
+
+        app_at = approval.get("approved_at")
+        _require_aware_iso8601(app_at, "privacy.approval.approved_at")
+
+        app_hash = approval.get("approved_content_hash")
+        if not isinstance(app_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", app_hash):
+            raise ValueError("privacy.approval.approved_content_hash must be a lowercase 64-character SHA-256 value")
+
+        if app_hash != caller_hash:
+            raise ValueError("privacy.approval.approved_content_hash does not match content_hash")
+
+    elif rel_basis == "automatic_policy":
+        checks = privacy.get("checks_passed")
+        if not isinstance(checks, list) or len(checks) == 0 or not all(isinstance(c, str) for c in checks):
+            raise ValueError("privacy.checks_passed must be a non-empty list of strings for automatic_policy")
 
 
 class RecordDatabase:
@@ -243,8 +311,8 @@ class RecordDatabase:
 
         item_id = str(payload["item_id"])
         item_kind = str(payload["item_kind"])
-        target_agent = str(payload.get("target_agent") or "openclaw")
-        content = payload.get("content", {})
+        target_agent = str(payload["target_agent"])
+        content = payload["content"]
         task = payload.get("task")
 
         # 2. Recompute canonical hash and reject caller mismatch BEFORE opening transaction
@@ -255,45 +323,24 @@ class RecordDatabase:
             task=task,
         )
 
-        caller_hash = payload.get("content_hash")
-        if caller_hash is not None:
-            if not isinstance(caller_hash, str) or not re.match(
-                r"^[a-fA-F0-9]{64}$", caller_hash
-            ):
-                raise ValueError("Caller content_hash must be a 64-character hex string")
-            if caller_hash.lower() != computed_hash.lower():
-                raise ValueError(
-                    f"Payload content_hash '{caller_hash}' does not match recomputed canonical content hash '{computed_hash}'"
-                )
+        caller_hash = payload["content_hash"]
+        if caller_hash != computed_hash:
+            raise ValueError("content_hash does not match recomputed canonical content hash")
 
         content_hash = computed_hash
+        privacy = payload["privacy"]
 
-        privacy = payload.get("privacy", {})
-
-        # 3. Map production v2 contract fields accurately
-        source_device_id = payload.get("source_device_id") or payload.get("source_device")
-        recorded_at = content.get("recorded_at") or payload.get("recorded_at")
+        source_device_id = str(payload["source_device_id"])
+        recorded_at = content.get("recorded_at")
 
         dur_val = content.get("duration_seconds")
-        if dur_val is None:
-            dur_val = content.get("duration") or payload.get("duration_seconds") or payload.get("duration")
-        try:
-            duration_seconds: Optional[float] = float(dur_val) if dur_val is not None else None
-        except (ValueError, TypeError):
-            duration_seconds = None
+        duration_seconds: Optional[float] = float(dur_val) if dur_val is not None else None
 
-        classification = (
-            privacy.get("automatic_classification")
-            or privacy.get("classification")
-        )
-        risk_level = privacy.get("risk_level")
-        release_basis = privacy.get("release_basis")
+        classification = str(privacy["automatic_classification"])
+        risk_level = str(privacy["risk_level"])
+        release_basis = str(privacy["release_basis"])
 
-        approval_raw = (
-            privacy.get("approval")
-            or payload.get("approval_metadata")
-            or privacy.get("approval_metadata")
-        )
+        approval_raw = privacy.get("approval")
         approval_json = json.dumps(approval_raw) if approval_raw is not None else None
 
         tags_raw = content.get("tags")
@@ -306,11 +353,11 @@ class RecordDatabase:
             else None
         )
 
-        transcript = content.get("transcript") if "transcript" in content else None
-        schema_version = payload.get("schema_version", "cvn.outbound_item.v2")
-        created_at = payload.get("created_at", "")
+        transcript = content.get("transcript")
+        schema_version = str(payload["schema_version"])
+        created_at = str(payload["created_at"])
         received_at = payload.get("received_at")
-        title = content.get("title", "")
+        title = content["title"]
         summary = content.get("summary")
         category = content.get("category")
         safe_processing_ref = (
