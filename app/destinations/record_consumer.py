@@ -5,14 +5,12 @@ import os
 from pathlib import Path
 import re
 import tempfile
-import threading
 from typing import Any, Dict, Optional
 
 from app.audit.audit_logger import log_audit_event
 from app.destinations.record_db import RecordDatabase
+from app.utils.file_lock import ProcessFileLock
 from app.utils.paths import get_app_data_dir
-
-_export_lock = threading.Lock()
 
 
 def sanitize_csv_field(val: Any) -> str:
@@ -42,7 +40,7 @@ class RecordConsumer:
     """Consumer for record_only outbound items.
 
     Populates structured records into SQLite database transactionally and
-    regenerates CSV export atomically from a consistent database snapshot.
+    regenerates CSV export atomically from a consistent database snapshot using inter-process locks.
     """
 
     def __init__(
@@ -59,15 +57,25 @@ class RecordConsumer:
             db_file = self.export_file.with_suffix(".db")
 
         self.db = RecordDatabase(db_file)
-        self.regenerate_csv()
+        self.lock_file = self.export_file.with_suffix(".lock")
+
+        # Initial CSV generation attempt
+        try:
+            self.regenerate_csv()
+        except Exception as exc:
+            log_audit_event(
+                "RECORD_CONSUMER_INIT_EXPORT_PENDING",
+                "record_consumer",
+                f"Initial CSV export postponed: {exc}",
+            )
 
     def is_already_processed(self, item_id: str) -> bool:
         """Returns True if item_id exists in the authoritative SQLite store."""
         return self.db.get_record(item_id) is not None
 
     def regenerate_csv(self) -> Path:
-        """Atomically regenerates the CSV spreadsheet export from SQLite."""
-        with _export_lock:
+        """Atomically regenerates the CSV spreadsheet export from SQLite using an inter-process file lock."""
+        with ProcessFileLock(self.lock_file):
             records = self.db.get_all_records()
             temp_dir = self.export_file.parent
             temp_dir.mkdir(parents=True, exist_ok=True)
@@ -122,6 +130,11 @@ class RecordConsumer:
                     os.fsync(f.fileno())
 
                 os.replace(tmp_path, self.export_file)
+
+                # Mark all records as exported in SQLite
+                item_ids = [r["item_id"] for r in records if "item_id" in r]
+                self.db.mark_records_exported(item_ids)
+
                 return self.export_file
             except Exception as e:
                 if tmp_path.exists():
@@ -135,22 +148,31 @@ class RecordConsumer:
         """Transactionally persists record to SQLite and updates CSV export.
 
         Raises:
-            ValueError: If payload fails validation.
+            ValueError: If payload fails validation or content_hash mismatch.
             IdempotencyConflictError: If payload has conflicting content_hash for item_id.
         """
         # Validate and insert record in single transaction inside SQLite DB
         record, is_new = self.db.insert_record(payload)
-        item_id = payload["item_id"]
+        item_id = str(payload["item_id"])
 
-        # Attempt CSV export regeneration (Task 15: Export error does not undo durable record)
+        # Attempt CSV export regeneration
+        export_succeeded = False
         try:
             self.regenerate_csv()
+            export_succeeded = True
         except Exception as exc:
             log_audit_event(
-                "RECORD_EXPORT_FAILED",
+                "RECORD_EXPORT_PENDING",
                 "record_consumer",
-                f"CSV generation failed for item {item_id}: {exc}",
+                f"CSV generation pending for item {item_id}: {exc}",
             )
+
+        if not export_succeeded:
+            return {
+                "status": "export_pending",
+                "item_id": item_id,
+                "export_row_id": item_id,
+            }
 
         if is_new:
             log_audit_event(
@@ -174,3 +196,24 @@ class RecordConsumer:
                 "item_id": item_id,
                 "export_row_id": item_id,
             }
+
+    def retry_pending_exports(self) -> int:
+        """Attempts to regenerate CSV export for any records in 'pending' status.
+
+        Returns:
+            Count of records remaining in 'pending' status.
+        """
+        pending = self.db.get_pending_export_records()
+        if not pending:
+            return 0
+
+        try:
+            self.regenerate_csv()
+        except Exception as exc:
+            log_audit_event(
+                "RECORD_EXPORT_RETRY_FAILED",
+                "record_consumer",
+                f"CSV export retry failed: {exc}",
+            )
+
+        return len(self.db.get_pending_export_records())

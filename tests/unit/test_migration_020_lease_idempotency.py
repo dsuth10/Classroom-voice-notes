@@ -2,6 +2,7 @@
 """Unit tests verifying Migration 020 SQL structure, lease hashing, backoff logic, ownership cleanup, and state machine lifecycle."""
 import hashlib
 import sqlite3
+import uuid
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -113,7 +114,7 @@ def test_unit_migration_020_ownership_cleanup_and_dead_letter_lifecycle() -> Non
     conn.commit()
 
     # 2. Simulate Claim: Store hashed lease
-    lease_token = "cvn-lease-secret-12345"
+    lease_token = f"lease-secret-{uuid.uuid4().hex[:12]}"
     lease_token_hash = hashlib.sha256(lease_token.encode("utf-8")).hexdigest()
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=300)).isoformat()
 
