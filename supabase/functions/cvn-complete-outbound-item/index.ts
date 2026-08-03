@@ -98,6 +98,19 @@ serve(async (req: Request) => {
     );
   }
 
+  if (body.result_json && JSON.stringify(body.result_json).length > 65536) {
+    return new Response(
+      JSON.stringify({
+        error: "result_payload_too_large",
+        message: "result_json payload exceeds 64 KB size limit",
+      }),
+      {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+
   const { data, error } = await supabase.rpc("cvn_complete_outbound_item", {
     p_item_id: itemId,
     p_worker_id: workerId,
@@ -105,6 +118,7 @@ serve(async (req: Request) => {
     p_payload_hash: payloadHash,
     p_content_hash: contentHash,
     p_result_json: body.result_json ?? null,
+    p_result_reference: body.result_reference ?? null,
   });
 
   if (error) {

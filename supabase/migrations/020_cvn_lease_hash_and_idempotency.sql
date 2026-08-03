@@ -1,5 +1,5 @@
 -- 020_cvn_lease_hash_and_idempotency.sql
--- Step 7: Lease Hashing, Backoff Retries, and Submission Idempotency in Forward Migration 020
+-- Step 7 Remediation: Server-Controlled Max Retries, Concurrency-Safe Idempotency, Complete Lease Field Cleanup, and Bounded Payloads
 
 BEGIN;
 
@@ -13,16 +13,20 @@ ALTER TABLE public.cvn_outbound_items
 
 -- Check constraint for lease_token_hash hex format (64-char hex SHA256)
 ALTER TABLE public.cvn_outbound_items DROP CONSTRAINT IF EXISTS check_outbound_lease_token_hash_hex;
-ALTER TABLE public.cvn_outbound_items ADD CONSTRAINT check_outbound_lease_token_hash_hex 
+ALTER TABLE public.cvn_outbound_items ADD CONSTRAINT check_outbound_lease_token_hash_hex
     CHECK (lease_token_hash IS NULL OR lease_token_hash ~ '^[0-9a-f]{64}$');
 
--- 2. Migrate active plaintext lease claims to retryable state to avoid orphaned lockouts
+-- 2. Migrate active plaintext lease claims to retryable state clearing all ownership fields
 UPDATE public.cvn_outbound_items
 SET status = 'failed_retryable',
     next_attempt_at = now(),
     lease_token = NULL,
+    lease_token_hash = NULL,
     lease_expires_at = NULL,
-    visibility_deadline = NULL
+    visibility_deadline = NULL,
+    claimed_by = NULL,
+    claimed_by_worker_id = NULL,
+    claimed_at = NULL
 WHERE status IN ('claimed', 'claiming', 'processing')
   AND lease_token_hash IS NULL
   AND lease_token IS NOT NULL;
@@ -32,7 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_cvn_outbound_items_claim_eligible
     ON public.cvn_outbound_items (status, next_attempt_at, created_at)
     WHERE status IN ('submitted', 'received', 'failed_retryable');
 
--- 4. Update cvn_submit_outbound_item with Exact Idempotency Matching vs Conflict
+-- 4. Update cvn_submit_outbound_item with Concurrency-Safe Atomic Idempotency
 CREATE OR REPLACE FUNCTION public.cvn_submit_outbound_item(
     p_item_id TEXT,
     p_source_device_id TEXT,
@@ -60,48 +64,17 @@ DECLARE
     v_existing_status TEXT;
     v_existing_nonce TEXT;
 BEGIN
-    -- 1. Idempotency Check (exact match returns existing accepted status; mismatch raises conflict)
-    SELECT item_id, content_hash, status INTO v_existing_id, v_existing_content_hash, v_existing_status
-    FROM public.cvn_outbound_items
-    WHERE idempotency_key = p_idempotency_key;
-
-    IF v_existing_id IS NOT NULL THEN
-        IF v_existing_id = p_item_id AND v_existing_content_hash = p_content_hash THEN
-            RETURN jsonb_build_object(
-                'accepted', true,
-                'item_id', v_existing_id,
-                'status', v_existing_status,
-                'idempotent_replay', true
-            );
-        ELSE
-            RAISE EXCEPTION 'idempotency_conflict: key % already used for item %', p_idempotency_key, v_existing_id
-                USING ERRCODE = '23505';
-        END IF;
-    END IF;
-
-    -- 2. Nonce Replay Check
-    SELECT nonce INTO v_existing_nonce
-    FROM public.cvn_outbound_items
-    WHERE source_device_id = p_source_device_id AND nonce = p_nonce;
-
-    IF v_existing_nonce IS NOT NULL THEN
-        RAISE EXCEPTION 'nonce_replayed: %', p_nonce
-            USING ERRCODE = '23505';
-    END IF;
-
-    -- 3. Stale / Future Timestamp Check (5 min limit)
+    -- 1. Pre-validations
     IF p_signed_at < (now() - INTERVAL '5 minutes') OR p_signed_at > (now() + INTERVAL '5 minutes') THEN
         RAISE EXCEPTION 'timestamp_skew: signed_at must be within 5 minutes of server time'
             USING ERRCODE = '22007';
     END IF;
 
-    -- 3b. Schema Version Check
     IF (p_payload_json->>'schema_version') <> 'cvn.outbound_item.v2' THEN
         RAISE EXCEPTION 'invalid_schema_version: expected cvn.outbound_item.v2'
             USING ERRCODE = '22023';
     END IF;
 
-    -- 4. Release Basis Validation Constraints
     IF p_release_basis = 'automatic_policy' THEN
         IF p_automatic_classification <> 'non_sensitive' OR p_risk_level <> 'low' THEN
             RAISE EXCEPTION 'invalid_release_basis: automatic_policy requires non_sensitive classification and low risk'
@@ -114,7 +87,6 @@ BEGIN
         END IF;
     END IF;
 
-    -- 5. Record-Only Validation Constraint
     IF p_item_kind = 'record_only' THEN
         IF p_payload_json->'task' IS NOT NULL AND p_payload_json->'task' <> 'null'::jsonb THEN
             RAISE EXCEPTION 'invalid_item_kind: record_only items cannot contain executable task instructions'
@@ -122,28 +94,62 @@ BEGIN
         END IF;
     END IF;
 
-    -- 6. Insert Into cvn_outbound_items Table
-    INSERT INTO public.cvn_outbound_items (
-        item_id, source_device_id, item_kind, target_agent, status,
-        payload_json, payload_hash, content_hash, automatic_classification,
-        risk_level, release_basis, approved_at, policy_gate_version,
-        idempotency_key, nonce, signed_at
-    ) VALUES (
-        p_item_id, p_source_device_id, p_item_kind, p_target_agent, 'submitted',
-        p_payload_json, p_payload_hash, p_content_hash, p_automatic_classification,
-        p_risk_level, p_release_basis, p_approved_at, p_policy_gate_version,
-        p_idempotency_key, p_nonce, p_signed_at
-    );
+    -- 2. Atomic Insert with Concurrency-Safe Exception Catching for Idempotency and Nonce Replays
+    BEGIN
+        INSERT INTO public.cvn_outbound_items (
+            item_id, source_device_id, item_kind, target_agent, status,
+            payload_json, payload_hash, content_hash, automatic_classification,
+            risk_level, release_basis, approved_at, policy_gate_version,
+            idempotency_key, nonce, signed_at
+        ) VALUES (
+            p_item_id, p_source_device_id, p_item_kind, p_target_agent, 'submitted',
+            p_payload_json, p_payload_hash, p_content_hash, p_automatic_classification,
+            p_risk_level, p_release_basis, p_approved_at, p_policy_gate_version,
+            p_idempotency_key, p_nonce, p_signed_at
+        );
 
-    RETURN jsonb_build_object(
-        'accepted', true,
-        'item_id', p_item_id,
-        'status', 'submitted'
-    );
+        RETURN jsonb_build_object(
+            'accepted', true,
+            'item_id', p_item_id,
+            'status', 'submitted'
+        );
+    EXCEPTION WHEN unique_violation THEN
+        -- Check if nonce was replayed
+        SELECT nonce INTO v_existing_nonce
+        FROM public.cvn_outbound_items
+        WHERE source_device_id = p_source_device_id AND nonce = p_nonce;
+
+        IF v_existing_nonce IS NOT NULL THEN
+            RAISE EXCEPTION 'nonce_replayed: %', p_nonce
+                USING ERRCODE = '23505';
+        END IF;
+
+        -- Check idempotency key
+        SELECT item_id, content_hash, status INTO v_existing_id, v_existing_content_hash, v_existing_status
+        FROM public.cvn_outbound_items
+        WHERE idempotency_key = p_idempotency_key;
+
+        IF v_existing_id IS NOT NULL THEN
+            IF v_existing_id = p_item_id AND v_existing_content_hash = p_content_hash THEN
+                RETURN jsonb_build_object(
+                    'accepted', true,
+                    'item_id', v_existing_id,
+                    'status', v_existing_status,
+                    'idempotent_replay', true
+                );
+            ELSE
+                RAISE EXCEPTION 'idempotency_conflict: key % already used for item %', p_idempotency_key, v_existing_id
+                    USING ERRCODE = '23505';
+            END IF;
+        END IF;
+
+        RAISE EXCEPTION 'unique_violation_conflict: duplicate key or item_id'
+            USING ERRCODE = '23505';
+    END;
 END;
 $$;
 
--- 5. Update cvn_claim_outbound_item with Server-Side Hashed Lease & next_attempt_at Checking
+-- 5. Update cvn_claim_outbound_item with Hashed Lease & next_attempt_at Checking
 CREATE OR REPLACE FUNCTION public.cvn_claim_outbound_item(
     p_worker_id TEXT,
     p_visibility_timeout_seconds INT DEFAULT 300,
@@ -191,7 +197,7 @@ BEGIN
         claimed_by = p_worker_id,
         claimed_by_worker_id = p_worker_id,
         claimed_at = now(),
-        lease_token = NULL, -- do not store plaintext lease
+        lease_token = NULL,
         lease_token_hash = v_lease_token_hash,
         lease_expires_at = v_lease_expires,
         visibility_deadline = v_lease_expires,
@@ -207,7 +213,7 @@ BEGIN
         'payload_json', v_item.payload_json,
         'content_hash', v_item.content_hash,
         'payload_hash', v_item.payload_hash,
-        'lease_token', v_lease_token, -- returned once in plaintext
+        'lease_token', v_lease_token,
         'lease_expires_at', v_lease_expires,
         'attempt_count', v_item.attempt_count + 1,
         'visibility_deadline', v_lease_expires
@@ -215,14 +221,17 @@ BEGIN
 END;
 $$;
 
--- 6. Update cvn_complete_outbound_item with Hashed Lease Verification & Ownership Clearing
+-- 6. Update cvn_complete_outbound_item with Complete Lease Ownership Cleanup & Payload Size Bounds
+DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item(text, text, text, text, text, jsonb);
+
 CREATE OR REPLACE FUNCTION public.cvn_complete_outbound_item(
     p_item_id TEXT,
     p_worker_id TEXT,
     p_lease_token TEXT,
     p_payload_hash TEXT,
     p_content_hash TEXT,
-    p_result_json JSONB DEFAULT NULL
+    p_result_json JSONB DEFAULT NULL,
+    p_result_reference TEXT DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -248,6 +257,14 @@ BEGIN
         RAISE EXCEPTION 'missing_content_hash: content_hash is required' USING ERRCODE = '22023';
     END IF;
 
+    -- Payload size and reference bounds
+    IF p_result_json IS NOT NULL AND length(p_result_json::text) > 65536 THEN
+        RAISE EXCEPTION 'result_payload_too_large: result_json size exceeds 64 KB limit' USING ERRCODE = '22023';
+    END IF;
+    IF p_result_reference IS NOT NULL AND length(p_result_reference) > 256 THEN
+        RAISE EXCEPTION 'result_reference_too_long: result_reference exceeds 256 characters' USING ERRCODE = '22023';
+    END IF;
+
     SELECT * INTO v_row
     FROM public.cvn_outbound_items
     WHERE item_id = p_item_id
@@ -269,7 +286,6 @@ BEGIN
         RAISE EXCEPTION 'invalid_claim_owner: item % is owned by % not %', p_item_id, COALESCE(v_row.claimed_by_worker_id, v_row.claimed_by), p_worker_id USING ERRCODE = '28000';
     END IF;
 
-    -- Validate lease token via SHA256 digest
     v_given_lease_hash := encode(sha256(convert_to(p_lease_token, 'UTF8')), 'hex');
 
     IF (v_row.lease_token_hash IS NOT NULL AND v_row.lease_token_hash IS DISTINCT FROM v_given_lease_hash)
@@ -289,14 +305,19 @@ BEGIN
         RAISE EXCEPTION 'payload_hash_mismatch: Provided payload hash does not match item payload_hash' USING ERRCODE = '22023';
     END IF;
 
+    -- Complete item and CLEAR ALL LEASE OWNERSHIP FIELDS
     UPDATE public.cvn_outbound_items
     SET status = 'completed',
         completed_at = now(),
         result_json = COALESCE(p_result_json, result_json),
+        result_reference = COALESCE(p_result_reference, result_reference),
         lease_token = NULL,
         lease_token_hash = NULL,
         lease_expires_at = NULL,
-        visibility_deadline = NULL
+        visibility_deadline = NULL,
+        claimed_by = NULL,
+        claimed_by_worker_id = NULL,
+        claimed_at = NULL
     WHERE item_id = p_item_id;
 
     RETURN jsonb_build_object(
@@ -307,25 +328,30 @@ BEGIN
 END;
 $$;
 
--- 7. Update cvn_fail_outbound_item with Hashed Lease & Exponential Backoff Calculation
+-- 7. Update cvn_fail_outbound_item with Server-Controlled Max Attempts, Ownership Cleanup, and Bounded Failure Data
+DROP FUNCTION IF EXISTS public.cvn_fail_outbound_item(text, text, text, text, boolean, integer);
+
 CREATE OR REPLACE FUNCTION public.cvn_fail_outbound_item(
     p_item_id TEXT,
     p_worker_id TEXT,
     p_lease_token TEXT,
     p_failure_reason TEXT,
     p_retryable BOOLEAN DEFAULT TRUE,
-    p_max_attempts INT DEFAULT 3
+    p_error_code TEXT DEFAULT NULL
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+    v_max_attempts CONSTANT INT := 3; -- SERVER-CONTROLLED RETRY CEILING (worker cannot override)
     v_row RECORD;
     v_given_lease_hash TEXT;
     v_next_status TEXT;
     v_backoff_seconds INT;
     v_next_attempt_at TIMESTAMPTZ;
+    v_sanitized_reason TEXT;
+    v_error_code TEXT;
 BEGIN
     IF p_item_id IS NULL OR trim(p_item_id) = '' THEN
         RAISE EXCEPTION 'missing_item_id: item_id is required' USING ERRCODE = '22023';
@@ -336,6 +362,10 @@ BEGIN
     IF p_lease_token IS NULL OR trim(p_lease_token) = '' THEN
         RAISE EXCEPTION 'missing_lease_token: lease_token is required' USING ERRCODE = '22023';
     END IF;
+
+    -- Sanitize and bound failure inputs
+    v_sanitized_reason := substr(COALESCE(p_failure_reason, 'unknown_failure'), 1, 1024);
+    v_error_code := COALESCE(substr(trim(p_error_code), 1, 64), 'worker_failure');
 
     SELECT * INTO v_row
     FROM public.cvn_outbound_items
@@ -361,7 +391,7 @@ BEGIN
         RAISE EXCEPTION 'lease_expired: Claim lease has expired' USING ERRCODE = '22023';
     END IF;
 
-    IF p_retryable AND v_row.attempt_count < p_max_attempts THEN
+    IF p_retryable AND v_row.attempt_count < v_max_attempts THEN
         v_next_status := 'failed_retryable';
         -- Server-controlled exponential backoff: 10 * (2 ^ (attempt_count - 1)) seconds, max 3600 seconds (1 hour)
         v_backoff_seconds := LEAST(3600, (10 * (2 ^ GREATEST(0, v_row.attempt_count - 1)))::INT);
@@ -371,17 +401,21 @@ BEGIN
         v_next_attempt_at := NULL;
     END IF;
 
+    -- Fail item and CLEAR ALL LEASE OWNERSHIP FIELDS
     UPDATE public.cvn_outbound_items
     SET status = v_next_status,
         failed_at = now(),
-        failure_reason = p_failure_reason,
-        last_error_code = 'worker_failure',
+        failure_reason = v_sanitized_reason,
+        last_error_code = v_error_code,
         last_error_at = now(),
         next_attempt_at = v_next_attempt_at,
         lease_token = NULL,
         lease_token_hash = NULL,
         lease_expires_at = NULL,
-        visibility_deadline = NULL
+        visibility_deadline = NULL,
+        claimed_by = NULL,
+        claimed_by_worker_id = NULL,
+        claimed_at = NULL
     WHERE item_id = p_item_id;
 
     RETURN jsonb_build_object(
@@ -389,7 +423,7 @@ BEGIN
         'item_id', p_item_id,
         'status', v_next_status,
         'attempt_count', v_row.attempt_count,
-        'max_attempts', p_max_attempts,
+        'max_attempts', v_max_attempts,
         'next_attempt_at', v_next_attempt_at
     );
 END;
@@ -398,12 +432,12 @@ $$;
 -- 8. Execution Permissions
 REVOKE ALL ON FUNCTION public.cvn_submit_outbound_item FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.cvn_claim_outbound_item(text, integer, text[], text[]) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.cvn_complete_outbound_item(text, text, text, text, text, jsonb) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.cvn_fail_outbound_item(text, text, text, text, boolean, integer) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.cvn_complete_outbound_item(text, text, text, text, text, jsonb, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.cvn_fail_outbound_item(text, text, text, text, boolean, text) FROM PUBLIC, anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION public.cvn_submit_outbound_item TO service_role;
 GRANT EXECUTE ON FUNCTION public.cvn_claim_outbound_item(text, integer, text[], text[]) TO service_role;
-GRANT EXECUTE ON FUNCTION public.cvn_complete_outbound_item(text, text, text, text, text, jsonb) TO service_role;
-GRANT EXECUTE ON FUNCTION public.cvn_fail_outbound_item(text, text, text, text, boolean, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cvn_complete_outbound_item(text, text, text, text, text, jsonb, text) TO service_role;
+GRANT EXECUTE ON FUNCTION public.cvn_fail_outbound_item(text, text, text, text, boolean, text) TO service_role;
 
 COMMIT;

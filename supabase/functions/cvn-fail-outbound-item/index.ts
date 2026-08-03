@@ -95,13 +95,20 @@ serve(async (req: Request) => {
     );
   }
 
+  const failureReason = typeof body.failure_reason === "string"
+    ? body.failure_reason.slice(0, 1024)
+    : "unknown_failure";
+  const errorCode = typeof body.error_code === "string"
+    ? body.error_code.slice(0, 64)
+    : "worker_failure";
+
   const { data, error } = await supabase.rpc("cvn_fail_outbound_item", {
     p_item_id: itemId,
     p_worker_id: workerId,
     p_lease_token: leaseToken,
-    p_failure_reason: body.failure_reason ?? "unknown_failure",
+    p_failure_reason: failureReason,
     p_retryable: body.retryable ?? true,
-    p_max_attempts: body.max_attempts ?? 3,
+    p_error_code: errorCode,
   });
 
   if (error) {

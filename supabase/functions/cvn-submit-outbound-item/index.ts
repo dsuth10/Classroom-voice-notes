@@ -333,12 +333,15 @@ serve(async (req: Request) => {
 
   if (error) {
     if (error.code === "23505") {
-      const isConflict = error.message?.includes("idempotency_conflict");
+      let errCode = "duplicate_idempotency_key";
+      if (error.message?.includes("idempotency_conflict")) {
+        errCode = "idempotency_conflict";
+      } else if (error.message?.includes("nonce_replayed")) {
+        errCode = "nonce_replayed";
+      }
       return new Response(
         JSON.stringify({
-          error: isConflict
-            ? "idempotency_conflict"
-            : "duplicate_idempotency_key",
+          error: errCode,
           message: error.message,
         }),
         {

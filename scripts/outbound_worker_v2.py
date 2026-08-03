@@ -110,7 +110,7 @@ class OutboundWorkerV2:
         payload_hash = item.get("payload_hash", "")
         content_hash = item.get("content_hash", "")
 
-        logger.info(f"Processing item {item_id} (lease token {lease_token}) for target agent {item.get('target_agent')}")
+        logger.info(f"Processing item {item_id} for target agent {item.get('target_agent')}")
 
         try:
             result_payload = {

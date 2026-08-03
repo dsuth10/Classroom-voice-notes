@@ -40,7 +40,11 @@ def test_migration_020_sql_structure_and_permissions() -> None:
     assert "lease_token_hash IS DISTINCT FROM v_given_lease_hash" in content
     assert "lease_token_hash = NULL" in content
 
-    # cvn_fail_outbound_item backoff calculation
+    # cvn_fail_outbound_item server-controlled max attempts & ownership cleanup
+    assert "v_max_attempts CONSTANT INT := 3;" in content
+    assert "claimed_by = NULL" in content
+    assert "claimed_by_worker_id = NULL" in content
+    assert "claimed_at = NULL" in content
     assert "v_backoff_seconds :=" in content
     assert "LEAST(3600" in content
     assert "v_next_status := 'dead_letter'" in content
@@ -49,5 +53,5 @@ def test_migration_020_sql_structure_and_permissions() -> None:
     assert "REVOKE ALL ON FUNCTION public.cvn_submit_outbound_item FROM PUBLIC, anon, authenticated;" in content
     assert "GRANT EXECUTE ON FUNCTION public.cvn_submit_outbound_item TO service_role;" in content
     assert "GRANT EXECUTE ON FUNCTION public.cvn_claim_outbound_item(text, integer, text[], text[]) TO service_role;" in content
-    assert "GRANT EXECUTE ON FUNCTION public.cvn_complete_outbound_item(text, text, text, text, text, jsonb) TO service_role;" in content
-    assert "GRANT EXECUTE ON FUNCTION public.cvn_fail_outbound_item(text, text, text, text, boolean, integer) TO service_role;" in content
+    assert "GRANT EXECUTE ON FUNCTION public.cvn_complete_outbound_item(text, text, text, text, text, jsonb, text) TO service_role;" in content
+    assert "GRANT EXECUTE ON FUNCTION public.cvn_fail_outbound_item(text, text, text, text, boolean, text) TO service_role;" in content
