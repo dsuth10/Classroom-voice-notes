@@ -50,6 +50,25 @@ def _query_item(item_id: str) -> dict:
     return rows[0]
 
 
+def _claim_specific_item(worker_id: str, target_item_id: str, max_tries: int = 10) -> dict:
+    """Claims items until target_item_id is returned, isolating the test item on a shared queue."""
+    for _ in range(max_tries):
+        res = _rpc("cvn_claim_outbound_item", {
+            "p_worker_id": worker_id,
+            "p_visibility_timeout_seconds": 300,
+            "p_allowed_kinds": ["record_only", "agent_task"],
+            "p_allowed_agents": ["openclaw"],
+        })
+        assert res.status_code == 200, f"Claim failed: {res.text}"
+        data = res.json()
+        if not data:
+            time.sleep(0.5)
+            continue
+        if data.get("item_id") == target_item_id:
+            return data
+    pytest.fail(f"Could not claim target item {target_item_id} after {max_tries} attempts")
+
+
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for live staging tests")
 def test_migration_020_submit_exact_idempotency_and_conflict() -> None:
     """Submitting exact same payload and nonce returns idempotent_replay=True; different content with same key returns conflict."""
@@ -103,7 +122,7 @@ def test_migration_020_submit_exact_idempotency_and_conflict() -> None:
     data1 = res1.json()
     assert data1.get("accepted") is True
 
-    # 2. Re-submit exact identical payload & nonce -> Idempotent Replay (200)
+    # 2. Re-submit EXACT identical payload & nonce -> Idempotent Replay (200)
     res2 = _rpc("cvn_submit_outbound_item", {
         "p_item_id": item_id,
         "p_source_device_id": source_device,
@@ -149,7 +168,7 @@ def test_migration_020_submit_exact_idempotency_and_conflict() -> None:
 
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for live staging tests")
 def test_migration_020_claim_complete_lifecycle_and_ownership_cleanup() -> None:
-    """Claiming an item returns a plaintext lease; completing clears all lease ownership fields in DB."""
+    """Claiming an item returns a plaintext lease; completing clears ALL lease ownership fields in DB."""
     worker_id = "test-worker-020-" + secrets.token_hex(4)
     item_id = f"CVNI-{time.strftime('%Y%m%d')}-120000-{secrets.token_hex(2).upper()}"
     source_device = "test-device-" + secrets.token_hex(4)
@@ -202,17 +221,9 @@ def test_migration_020_claim_complete_lifecycle_and_ownership_cleanup() -> None:
     })
     assert sub_res.status_code == 200
 
-    # Claim item
-    claim_res = _rpc("cvn_claim_outbound_item", {
-        "p_worker_id": worker_id,
-        "p_visibility_timeout_seconds": 300,
-        "p_allowed_kinds": ["record_only"],
-        "p_allowed_agents": ["openclaw"],
-    })
-    assert claim_res.status_code == 200
-    claimed_data = claim_res.json()
-    assert claimed_data is not None
-    assert "lease_token" in claimed_data
+    # Claim item with isolation check
+    claimed_data = _claim_specific_item(worker_id, item_id)
+    assert claimed_data["item_id"] == item_id
     lease_token = claimed_data["lease_token"]
 
     # Complete item with valid lease token
@@ -241,6 +252,68 @@ def test_migration_020_claim_complete_lifecycle_and_ownership_cleanup() -> None:
     assert row["claimed_by_worker_id"] is None
     assert row["claimed_at"] is None
     assert row["result_reference"] == "ref-12345"
+
+
+@pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for live staging tests")
+def test_migration_020_wrong_lease_token_rejection() -> None:
+    """Completing an item with an invalid lease token raises invalid_lease_token error."""
+    worker_id = "test-worker-020-" + secrets.token_hex(4)
+    item_id = f"CVNI-{time.strftime('%Y%m%d')}-120000-{secrets.token_hex(2).upper()}"
+    source_device = "test-device-" + secrets.token_hex(4)
+    signed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    idem_key = "idem-wrong-" + secrets.token_hex(6)
+    nonce = "nonce-wrong-" + secrets.token_hex(6)
+    content_hash = "7777777777777777777777777777777777777777777777777777777777777777"
+    payload_hash = "8888888888888888888888888888888888888888888888888888888888888888"
+
+    payload_json = {
+        "schema_version": "cvn.outbound_item.v2",
+        "item_id": item_id,
+        "item_kind": "record_only",
+        "target_agent": "openclaw",
+        "content": {},
+        "idempotency_key": idem_key,
+        "nonce": nonce,
+        "signed_at": signed_at,
+        "source_device_id": source_device,
+        "privacy": {
+            "release_basis": "human_approval",
+            "automatic_classification": "non_sensitive",
+            "risk_level": "low",
+            "policy_gate_version": "2.0.0",
+            "approval": {"approved_at": signed_at, "approved_content_hash": content_hash},
+        },
+    }
+
+    _rpc("cvn_submit_outbound_item", {
+        "p_item_id": item_id,
+        "p_source_device_id": source_device,
+        "p_item_kind": "record_only",
+        "p_target_agent": "openclaw",
+        "p_payload_json": payload_json,
+        "p_payload_hash": payload_hash,
+        "p_content_hash": content_hash,
+        "p_automatic_classification": "non_sensitive",
+        "p_risk_level": "low",
+        "p_release_basis": "human_approval",
+        "p_approved_at": signed_at,
+        "p_policy_gate_version": "2.0.0",
+        "p_idempotency_key": idem_key,
+        "p_nonce": nonce,
+        "p_signed_at": signed_at,
+    })
+
+    _claim_specific_item(worker_id, item_id)
+
+    comp_res = _rpc("cvn_complete_outbound_item", {
+        "p_item_id": item_id,
+        "p_worker_id": worker_id,
+        "p_lease_token": "cvn-lease-wrongtoken1234567890",
+        "p_payload_hash": payload_hash,
+        "p_content_hash": content_hash,
+    })
+    assert comp_res.status_code in (400, 500)
+    assert "invalid_lease_token" in comp_res.text
 
 
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for live staging tests")
@@ -292,13 +365,8 @@ def test_migration_020_repeated_completion_is_idempotent() -> None:
         "p_signed_at": signed_at,
     })
 
-    claim_res = _rpc("cvn_claim_outbound_item", {
-        "p_worker_id": worker_id,
-        "p_visibility_timeout_seconds": 300,
-        "p_allowed_kinds": ["record_only"],
-        "p_allowed_agents": ["openclaw"],
-    })
-    lease_token = claim_res.json()["lease_token"]
+    claimed_data = _claim_specific_item(worker_id, item_id)
+    lease_token = claimed_data["lease_token"]
 
     res1 = _rpc("cvn_complete_outbound_item", {
         "p_item_id": item_id,
@@ -324,7 +392,7 @@ def test_migration_020_repeated_completion_is_idempotent() -> None:
 
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for live staging tests")
 def test_migration_020_server_controlled_3_attempt_dead_letter() -> None:
-    """Failing an item 3 times uses server-controlled max attempts (3) to transition to dead_letter."""
+    """Failing an item 3 times tests backoff visibility, server-controlled max attempts (3), and unconditional dead_letter transition."""
     worker_id = "test-worker-020-" + secrets.token_hex(4)
     item_id = f"CVNI-{time.strftime('%Y%m%d')}-120000-{secrets.token_hex(2).upper()}"
     source_device = "test-device-" + secrets.token_hex(4)
@@ -372,23 +440,48 @@ def test_migration_020_server_controlled_3_attempt_dead_letter() -> None:
     })
 
     # Attempt 1
-    c1 = _rpc("cvn_claim_outbound_item", {"p_worker_id": worker_id, "p_allowed_kinds": ["record_only"], "p_allowed_agents": ["openclaw"]}).json()
+    c1 = _claim_specific_item(worker_id, item_id)
+    assert c1["item_id"] == item_id
     f1 = _rpc("cvn_fail_outbound_item", {"p_item_id": item_id, "p_worker_id": worker_id, "p_lease_token": c1["lease_token"], "p_failure_reason": "fail 1", "p_retryable": True}).json()
     assert f1.get("status") == "failed_retryable"
     assert f1.get("attempt_count") == 1
     assert f1.get("max_attempts") == 3
 
-    # Fast forward next_attempt_at by modifying row via SQL/RPC or waiting if backoff
-    # Attempt 2 & 3
-    for attempt in (2, 3):
-        # Claim with updated time requirement or direct claim if next_attempt_at is due
-        c = _rpc("cvn_claim_outbound_item", {"p_worker_id": worker_id, "p_allowed_kinds": ["record_only"], "p_allowed_agents": ["openclaw"]}).json()
-        if c:
-            f = _rpc("cvn_fail_outbound_item", {"p_item_id": item_id, "p_worker_id": worker_id, "p_lease_token": c["lease_token"], "p_failure_reason": f"fail {attempt}", "p_retryable": True}).json()
-            if attempt == 3:
-                assert f.get("status") == "dead_letter"
+    # Assert immediate claim receives NO item due to next_attempt_at backoff
+    row_backoff = _query_item(item_id)
+    assert row_backoff["next_attempt_at"] is not None
 
-    # Query DB row to verify lease fields are NULL on dead_letter
+    # Wait for backoff window to expire
+    start_time = time.time()
+    while time.time() - start_time < 12.0:
+        time.sleep(1.0)
+        c2 = _rpc("cvn_claim_outbound_item", {"p_worker_id": worker_id, "p_allowed_kinds": ["record_only"], "p_allowed_agents": ["openclaw"]}).json()
+        if c2 and c2.get("item_id") == item_id:
+            f2 = _rpc("cvn_fail_outbound_item", {"p_item_id": item_id, "p_worker_id": worker_id, "p_lease_token": c2["lease_token"], "p_failure_reason": "fail 2", "p_retryable": True}).json()
+            assert f2.get("status") == "failed_retryable"
+            assert f2.get("attempt_count") == 2
+            break
+
+    # Wait for backoff window 2 to expire
+    start_time = time.time()
+    while time.time() - start_time < 22.0:
+        time.sleep(1.0)
+        c3 = _rpc("cvn_claim_outbound_item", {"p_worker_id": worker_id, "p_allowed_kinds": ["record_only"], "p_allowed_agents": ["openclaw"]}).json()
+        if c3 and c3.get("item_id") == item_id:
+            f3 = _rpc("cvn_fail_outbound_item", {"p_item_id": item_id, "p_worker_id": worker_id, "p_lease_token": c3["lease_token"], "p_failure_reason": "fail 3", "p_retryable": True}).json()
+            assert f3.get("status") == "dead_letter"
+            assert f3.get("attempt_count") == 3
+            break
+
+    # Unconditional database verification for dead_letter
     row = _query_item(item_id)
-    assert row["claimed_by"] is None
+    assert row["status"] == "dead_letter"
+    assert row["attempt_count"] == 3
+    assert row["next_attempt_at"] is None
+    assert row["lease_token"] is None
     assert row["lease_token_hash"] is None
+    assert row["lease_expires_at"] is None
+    assert row["visibility_deadline"] is None
+    assert row["claimed_by"] is None
+    assert row["claimed_by_worker_id"] is None
+    assert row["claimed_at"] is None
