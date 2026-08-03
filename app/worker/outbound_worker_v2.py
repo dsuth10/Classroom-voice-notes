@@ -1,10 +1,12 @@
 """Outbound Worker V2 — Capability-scoped, production worker implementation for v2 outbound items."""
 
 import argparse
+from dataclasses import dataclass
 import json
 import logging
 import os
 import random
+import re
 import signal
 import sys
 import time
@@ -44,6 +46,28 @@ class FatalWorkerError(Exception):
     pass
 
 
+@dataclass
+class WorkerHealthStats:
+    """Typed metrics container for worker operational telemetry."""
+
+    worker_id: str
+    claim_count: int = 0
+    complete_count: int = 0
+    error_count: int = 0
+    last_claim_at: Optional[float] = None
+    last_complete_at: Optional[float] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "worker_id": self.worker_id,
+            "claim_count": self.claim_count,
+            "complete_count": self.complete_count,
+            "error_count": self.error_count,
+            "last_claim_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.last_claim_at)) if self.last_claim_at else None,
+            "last_complete_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.last_complete_at)) if self.last_complete_at else None,
+        }
+
+
 class OutboundWorkerV2:
     """Capability-scoped worker for claiming, processing, and completing v2 outbound items."""
 
@@ -80,13 +104,7 @@ class OutboundWorkerV2:
         self.backoff_max = 60.0
 
         # Health metrics
-        self.health_stats = {
-            "claim_count": 0,
-            "complete_count": 0,
-            "error_count": 0,
-            "last_claim_at": None,
-            "last_complete_at": None,
-        }
+        self.health_stats = WorkerHealthStats(worker_id=self.worker_id)
 
         # Initialize Journal
         self.journal = journal or WorkerJournal()
@@ -94,6 +112,10 @@ class OutboundWorkerV2:
 
         # Validate mandatory credentials and configuration
         self._validate_startup_config()
+
+    def get_health_snapshot(self) -> Dict[str, Any]:
+        """Returns typed, sanitized telemetry snapshot for monitoring."""
+        return self.health_stats.to_dict()
 
     def _validate_startup_config(self) -> None:
         missing = []
@@ -183,8 +205,8 @@ class OutboundWorkerV2:
             status_code, res_json = self._send_edge_rpc("cvn-claim-outbound-item", payload)
             if status_code == 200 and isinstance(res_json, dict) and res_json.get("claimed"):
                 self.backoff_current = self.poll_interval
-                self.health_stats["claim_count"] += 1
-                self.health_stats["last_claim_at"] = time.time()
+                self.health_stats.claim_count += 1
+                self.health_stats.last_claim_at = time.time()
                 return res_json
             elif status_code in (429, 500, 502, 503, 504):
                 logger.warning(f"RATE_LIMIT_OR_SERVER_ERROR: Claim RPC returned HTTP {status_code}; applying backoff.")
@@ -205,9 +227,9 @@ class OutboundWorkerV2:
         self.backoff_current = min(self.backoff_current * 1.5, self.backoff_max)
 
     def validate_claimed_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """Strictly validates raw claimed item from Edge RPC against contract.
+        """Strictly validates raw claimed item from Edge RPC against exact v2 contract.
 
-        Raises ValueError if claim or payload is invalid, missing, tampered, or contradictory.
+        Raises ValueError if claim or payload is invalid, missing mandatory fields, tampered, or contradictory.
         Returns the parsed inner payload dict.
         """
         if not isinstance(item, dict):
@@ -221,18 +243,26 @@ class OutboundWorkerV2:
         if not lease_token or not isinstance(lease_token, str):
             raise ValueError("Claim missing non-empty lease_token string")
 
-        item_kind = item.get("item_kind") or item.get("kind")
+        item_kind = item.get("item_kind")
         if item_kind not in ("record_only", "agent_task"):
-            raise ValueError(f"Claim item_kind '{item_kind}' is unsupported")
+            raise ValueError(f"Claim item_kind '{item_kind}' is missing or unsupported")
 
-        target_agent = item.get("target_agent") or item.get("target") or ""
+        target_agent = item.get("target_agent")
+        if not target_agent or not isinstance(target_agent, str):
+            raise ValueError("Claim missing non-empty target_agent string")
+        if target_agent in ("auto", "local", "none"):
+            raise ValueError(f"Claim target_agent '{target_agent}' is forbidden; exact target required")
+
+        if target_agent != "openclaw":
+            raise ValueError(f"Invalid target_agent '{target_agent}'; expected 'openclaw'")
+
         payload_hash = item.get("payload_hash")
-        if not payload_hash or not isinstance(payload_hash, str):
-            raise ValueError("Claim missing non-empty payload_hash string")
+        if not payload_hash or not isinstance(payload_hash, str) or not re.match(r"^sha256:[0-9a-f]{64}$", payload_hash):
+            raise ValueError("Claim payload_hash must match 'sha256:<64-hex-chars>' format")
 
         content_hash = item.get("content_hash")
-        if not content_hash or not isinstance(content_hash, str) or len(content_hash) != 64:
-            raise ValueError("Claim content_hash must be a 64-character SHA-256 string")
+        if not content_hash or not isinstance(content_hash, str) or not re.match(r"^[0-9a-f]{64}$", content_hash):
+            raise ValueError("Claim content_hash must be a 64-character hex SHA-256 string")
 
         payload = item.get("payload")
         if payload is None and "payload_json" in item:
@@ -240,29 +270,39 @@ class OutboundWorkerV2:
         if not isinstance(payload, dict):
             raise ValueError("Claim payload must be a dictionary")
 
-        # Envelope vs Payload Agreement Checks
+        # Mandatory Inner Envelope Agreement Checks
         schema_ver = payload.get("schema_version")
-        if schema_ver and schema_ver != "cvn.outbound_item.v2":
-            raise ValueError(f"Payload schema_version '{schema_ver}' is unsupported")
+        if not schema_ver or schema_ver != "cvn.outbound_item.v2":
+            raise ValueError(f"Payload schema_version '{schema_ver}' is missing or unsupported; expected 'cvn.outbound_item.v2'")
 
         in_item_id = payload.get("item_id")
-        if in_item_id and in_item_id != item_id:
-            raise ValueError(f"Inner payload item_id '{in_item_id}' contradicts outer claim item_id '{item_id}'")
+        if not in_item_id or in_item_id != item_id:
+            raise ValueError(f"Inner payload item_id '{in_item_id}' is missing or contradicts outer claim item_id '{item_id}'")
 
         in_item_kind = payload.get("item_kind")
-        if in_item_kind and in_item_kind != item_kind:
-            raise ValueError(f"Inner payload item_kind '{in_item_kind}' contradicts outer claim item_kind '{item_kind}'")
+        if not in_item_kind or in_item_kind != item_kind:
+            raise ValueError(f"Inner payload item_kind '{in_item_kind}' is missing or contradicts outer claim item_kind '{item_kind}'")
+
+        in_target_agent = payload.get("target_agent")
+        if not in_target_agent or in_target_agent != target_agent:
+            raise ValueError(f"Inner payload target_agent '{in_target_agent}' is missing or contradicts outer claim target_agent '{target_agent}'")
 
         in_content_hash = payload.get("content_hash")
-        if in_content_hash and in_content_hash != content_hash:
-            raise ValueError("Inner payload content_hash contradicts outer claim content_hash")
+        if not in_content_hash or in_content_hash != content_hash:
+            raise ValueError("Inner payload content_hash is missing or contradicts outer claim content_hash")
+
+        # Lease expiry validation
+        lease_expires_at = item.get("lease_expires_at")
+        if lease_expires_at is not None:
+            if time.time() >= float(lease_expires_at):
+                raise ValueError(f"Claim lease expired at {lease_expires_at}")
 
         # Recompute canonical content hash from content and task
         try:
             from app.destinations.canonical_json import compute_canonical_content_hash
             content = payload.get("content")
             task = payload.get("task")
-            _, calc_hash = compute_canonical_content_hash(item_kind, target_agent or None, content, task)
+            _, calc_hash = compute_canonical_content_hash(item_kind, target_agent, content, task)
             if calc_hash != content_hash:
                 raise ValueError(f"Recomputed canonical content_hash '{calc_hash}' does not match claimed content_hash '{content_hash}'")
         except Exception as exc:
@@ -284,7 +324,7 @@ class OutboundWorkerV2:
 
         # Check routing
         if item_kind == "record_only":
-            if target_agent and target_agent not in ("", "record_only", "local", "none", "openclaw"):
+            if target_agent != "openclaw":
                 logger.error(f"INVALID_ROUTING: record_only item {item_id} has unexpected target_agent '{target_agent}'")
                 return False, "UNSUPPORTED_TARGET_COMBINATION", None
 
@@ -325,7 +365,10 @@ class OutboundWorkerV2:
             except (UnsupportedTargetAgent, UnsupportedContractVersion, UnsupportedTaskType, InvalidTaskPayload) as client_err:
                 logger.error(f"PERMANENT_CONTRACT_ERROR: OpenClaw task validation failed for item {item_id}: {client_err}")
                 return False, f"PERMANENT_CONTRACT_ERROR: {client_err}", None
-            except (GatewayUnavailableError, GatewayRateLimitError, GatewayResponseError, ExecutionTimeoutUnknown, InvalidAgentResponse) as gw_err:
+            except (ExecutionTimeoutUnknown, InvalidAgentResponse) as unk_err:
+                logger.error(f"EXECUTION_OUTCOME_UNKNOWN: OpenClaw execution outcome unknown for item {item_id}: {unk_err}")
+                return False, f"EXECUTION_OUTCOME_UNKNOWN: {unk_err}", None
+            except (GatewayUnavailableError, GatewayRateLimitError, GatewayResponseError) as gw_err:
                 logger.error(f"GATEWAY_ERROR: OpenClaw execution failed for item {item_id}: {gw_err}")
                 return False, f"GATEWAY_ERROR: {gw_err}", None
             except Exception as exc:
@@ -337,7 +380,7 @@ class OutboundWorkerV2:
             return False, "UNSUPPORTED_ITEM_KIND", None
 
     def process_item(self, item: Dict[str, Any]) -> bool:
-        """Processes a claimed item with journal safety and log hygiene."""
+        """Processes a claimed item with journal safety, lease runtime margin checks, and log hygiene."""
         item_id = item.get("item_id", "")
         lease_token = item.get("lease_token", "")
         payload_hash = item.get("payload_hash", "")
@@ -366,7 +409,16 @@ class OutboundWorkerV2:
             self.fail_item(item_id, lease_token, "JOURNAL_IDENTITY_CONFLICT", retryable=False)
             return False
 
-        # 3. Journal recovery check
+        # 3. Verify remaining lease duration margin before executing consumer side effect
+        lease_expires_at = item.get("lease_expires_at")
+        if lease_expires_at is not None:
+            remaining_lease = float(lease_expires_at) - time.time()
+            if remaining_lease < 30.0:
+                logger.error(f"LEASE_EXPIRED_BEFORE_EXECUTION: Item {item_id} remaining lease margin ({remaining_lease:.1f}s) is less than required 30.0s.")
+                self.fail_item(item_id, lease_token, f"LEASE_EXPIRED_BEFORE_EXECUTION: remaining {remaining_lease:.1f}s", retryable=True)
+                return False
+
+        # 4. Journal recovery check
         result_payload = {
             "status": "delivered",
             "processed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -383,7 +435,7 @@ class OutboundWorkerV2:
             result_payload["result_reference"] = res_ref
             return self.complete_item(item_id, lease_token, payload_hash, content_hash, result_payload)
 
-        # 4. Invoke routing consumer
+        # 5. Invoke routing consumer
         try:
             success, error_code_or_ref, res_dict = self.route_and_process(item, validated_payload)
         except FatalWorkerError:
@@ -402,7 +454,12 @@ class OutboundWorkerV2:
             completed = self.complete_item(item_id, lease_token, payload_hash, content_hash, result_payload)
             return completed
         else:
-            self.health_stats["error_count"] += 1
+            self.health_stats.error_count += 1
+            if error_code_or_ref.startswith("EXECUTION_OUTCOME_UNKNOWN"):
+                logger.error(f"EXECUTION_OUTCOME_UNKNOWN: Item {item_id} transitioning to execution_outcome_unknown journal state to prevent automatic retry.")
+                self.journal.record_outcome_unknown(item_id, error_code_or_ref[:50])
+                return False
+
             retryable = True
             if "UNSUPPORTED" in error_code_or_ref or "PERMANENT" in error_code_or_ref or "INVALID" in error_code_or_ref:
                 retryable = False
@@ -436,19 +493,19 @@ class OutboundWorkerV2:
             if status_code == 200 and isinstance(res_json, dict) and (res_json.get("completed") or res_json.get("success")):
                 logger.info(f"Item {item_id} successfully completed remotely.")
                 self.journal.record_remote_complete(item_id)
-                self.health_stats["complete_count"] += 1
-                self.health_stats["last_complete_at"] = time.time()
+                self.health_stats.complete_count += 1
+                self.health_stats.last_complete_at = time.time()
                 return True
             else:
                 err_msg = res_json.get("error") if isinstance(res_json, dict) else f"HTTP {status_code}"
                 logger.error(f"Edge complete RPC rejected item {item_id}: {err_msg}")
-                self.health_stats["error_count"] += 1
+                self.health_stats.error_count += 1
                 return False
         except FatalWorkerError:
             raise
         except (urllib.error.URLError, TimeoutError, OSError) as net_err:
             logger.warning(f"NETWORK_TRANSIENT_ERROR: Complete request failed for item {item_id}: {net_err}")
-            self.health_stats["error_count"] += 1
+            self.health_stats.error_count += 1
             return False
 
     def fail_item(
@@ -480,15 +537,38 @@ class OutboundWorkerV2:
             return False
 
     def reconcile_pending_journal_entries(self) -> None:
-        """Startup reconciliation check for pending journal entries."""
+        """Startup reconciliation check for pending journal entries via cvn-outbound-status RPC."""
         try:
-            with self.journal._get_connection() as conn:
-                cur = conn.execute(
-                    "SELECT item_id, result_reference, created_at FROM worker_journal WHERE state = 'consumer_succeeded_pending_remote_complete'"
-                )
-                pending = [dict(r) for r in cur.fetchall()]
-                if pending:
-                    logger.info(f"STARTUP_RECONCILIATION: Found {len(pending)} pending journal entries awaiting remote completion.")
+            pending = self.journal.get_pending_entries()
+            if not pending:
+                return
+
+            logger.info(f"STARTUP_RECONCILIATION: Found {len(pending)} pending journal entries requiring status check.")
+            for entry in pending:
+                item_id = entry["item_id"]
+                state = entry["state"]
+                res_ref = entry.get("result_reference") or item_id
+
+                try:
+                    status_code, res_json = self._send_edge_rpc("cvn-outbound-status", {"item_id": item_id})
+                    if status_code == 200 and isinstance(res_json, dict) and res_json.get("found"):
+                        remote_status = res_json.get("status")
+                        logger.info(f"STARTUP_RECONCILIATION: Item {item_id} local state '{state}', remote status '{remote_status}'")
+                        if remote_status == "completed":
+                            self.journal.record_remote_complete(item_id)
+                        elif remote_status in ("claimed", "queued", "approved_pending_enqueue") and state == "consumer_succeeded_pending_remote_complete":
+                            # Retry completing remote item using recorded result reference
+                            result_payload = {
+                                "status": "delivered",
+                                "processed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                                "worker_id": self.worker_id,
+                                "result_reference": res_ref,
+                            }
+                            self.complete_item(item_id, "reconcile_token", entry["payload_hash"], entry["content_hash"], result_payload)
+                    else:
+                        logger.warning(f"STARTUP_RECONCILIATION: Status check RPC returned {status_code} for item {item_id}")
+                except Exception as rec_err:
+                    logger.warning(f"STARTUP_RECONCILIATION: Failed checking status for item {item_id}: {rec_err}")
         except Exception as exc:
             logger.warning(f"Startup journal reconciliation check failed: {exc}")
 

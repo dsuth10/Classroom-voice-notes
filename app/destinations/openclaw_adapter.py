@@ -121,8 +121,9 @@ class OpenClawAdapter:
             "model": f"openclaw/{self.config.get('agent_id', 'cvn-broker')}",
             "input": prompt,
             "user": f"cvn-task:{task_id}",
+            "idempotency_key": f"cvn-{task_id}",
             "stream": False,
-            "max_output_tokens": max_tokens
+            "max_output_tokens": max_tokens,
         }
 
     def execute(self, request: Dict[str, Any], timeout_seconds: int = 300) -> Dict[str, Any]:

@@ -84,6 +84,7 @@ class TestOpenClawAdapter(unittest.TestCase):
         self.assertEqual(req["model"], "openclaw/cvn-broker")
         self.assertEqual(req["input"], "Hello OpenClaw")
         self.assertEqual(req["user"], "cvn-task:CVN-20260710-120000-ABCD")
+        self.assertEqual(req["idempotency_key"], "cvn-CVN-20260710-120000-ABCD")
         self.assertEqual(req["max_output_tokens"], 200)
 
     @patch("requests.post")
@@ -97,11 +98,12 @@ class TestOpenClawAdapter(unittest.TestCase):
         res = self.adapter.execute(req, 120)
         self.assertEqual(res["output"], "CVN adapter connection successful.")
 
+        token_str = "test-gateway-token"
         mock_post.assert_called_once_with(
             "http://127.0.0.1:18789/v1/responses",
             json=req,
             headers={
-                "Authorization": "Bearer test-gateway-token",
+                "Authorization": f"Bearer {token_str}",
                 "Content-Type": "application/json",
                 "Idempotency-Key": "cvn-CVN-20260710-120000-ABCD",
                 "X-Idempotency-Key": "cvn-CVN-20260710-120000-ABCD",

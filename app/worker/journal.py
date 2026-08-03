@@ -171,6 +171,35 @@ class WorkerJournal:
             )
             conn.commit()
 
+    def record_outcome_unknown(self, item_id: str, error_code: str) -> None:
+        """Transitions state to execution_outcome_unknown with safe error code to prevent automatic retry."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE worker_journal
+                SET state = 'execution_outcome_unknown',
+                    error_code = ?,
+                    updated_at = ?
+                WHERE item_id = ?;
+                """,
+                (error_code or "EXECUTION_OUTCOME_UNKNOWN", now, item_id),
+            )
+            conn.commit()
+
+    def get_pending_entries(self) -> list[Dict[str, Any]]:
+        """Retrieves entries requiring reconciliation ('consumer_succeeded_pending_remote_complete', 'execution_outcome_unknown')."""
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                """
+                SELECT item_id, payload_hash, content_hash, consumer_kind, state,
+                       created_at, updated_at, result_reference, error_code
+                FROM worker_journal
+                WHERE state IN ('consumer_succeeded_pending_remote_complete', 'execution_outcome_unknown');
+                """
+            )
+            return [dict(row) for row in cur.fetchall()]
+
     def get_entry(self, item_id: str) -> Optional[Dict[str, Any]]:
         """Retrieves entry by item_id if present."""
         with self._get_connection() as conn:
