@@ -112,8 +112,9 @@ def test_full_v2_outbound_lifecycle_integration(tmp_path: Path, monkeypatch: pyt
         "item_kind": "record_only",
         "target_agent": "openclaw",
         "lease_token": "test_mock_lease_token_e2e_99",
-        "payload_hash": f"sha256:{valid_hash}",
+        "payload_hash": valid_hash,
         "content_hash": valid_hash,
+        "lease_expires_at": "2026-08-03T12:30:00Z",
         "payload_json": payload_json,
     }).encode("utf-8")
     mock_resp_claim.__enter__.return_value = mock_resp_claim

@@ -50,8 +50,9 @@ def test_worker_claim_and_process_item(tmp_path: Path) -> None:
         "item_kind": "record_only",
         "target_agent": "openclaw",
         "lease_token": "test_mock_lease_token_12345",
-        "payload_hash": f"sha256:{valid_hash}",
+        "payload_hash": valid_hash,
         "content_hash": valid_hash,
+        "lease_expires_at": "2026-08-03T12:30:00Z",
         "payload_json": {
             "schema_version": "cvn.outbound_item.v2",
             "item_kind": "record_only",

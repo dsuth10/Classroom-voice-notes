@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -44,6 +45,22 @@ class FatalWorkerError(Exception):
     """Fatal configuration or authentication error triggering worker process exit."""
 
     pass
+
+
+def parse_timestamp_to_seconds(val: Any) -> float:
+    """Parses timestamp value (int, float, or ISO-8601 string) to UTC epoch float."""
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str) and val.strip():
+        try:
+            clean_str = val.strip().replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            pass
+    raise ValueError(f"Unable to parse timestamp '{val}' to epoch seconds")
 
 
 @dataclass
@@ -257,8 +274,8 @@ class OutboundWorkerV2:
             raise ValueError(f"Invalid target_agent '{target_agent}'; expected 'openclaw'")
 
         payload_hash = item.get("payload_hash")
-        if not payload_hash or not isinstance(payload_hash, str) or not re.match(r"^sha256:[0-9a-f]{64}$", payload_hash):
-            raise ValueError("Claim payload_hash must match 'sha256:<64-hex-chars>' format")
+        if not payload_hash or not isinstance(payload_hash, str) or not re.match(r"^(sha256:)?[0-9a-f]{64}$", payload_hash):
+            raise ValueError("Claim payload_hash must be a 64-character hex SHA-256 string")
 
         content_hash = item.get("content_hash")
         if not content_hash or not isinstance(content_hash, str) or not re.match(r"^[0-9a-f]{64}$", content_hash):
@@ -294,7 +311,8 @@ class OutboundWorkerV2:
         # Lease expiry validation
         lease_expires_at = item.get("lease_expires_at")
         if lease_expires_at is not None:
-            if time.time() >= float(lease_expires_at):
+            exp_sec = parse_timestamp_to_seconds(lease_expires_at)
+            if time.time() >= exp_sec:
                 raise ValueError(f"Claim lease expired at {lease_expires_at}")
 
         # Recompute canonical content hash from content and task
@@ -409,16 +427,36 @@ class OutboundWorkerV2:
             self.fail_item(item_id, lease_token, "JOURNAL_IDENTITY_CONFLICT", retryable=False)
             return False
 
-        # 3. Verify remaining lease duration margin before executing consumer side effect
+        # 3. Quarantine check: Refuse to re-execute items with unknown gateway execution outcome
+        if journal_entry and journal_entry.get("state") == "execution_outcome_unknown":
+            logger.error(
+                f"EXECUTION_OUTCOME_UNKNOWN_QUARANTINE: Item {item_id} is quarantined in execution_outcome_unknown journal state. "
+                "Refusing to re-execute consumer until authoritative reconciliation."
+            )
+            return False
+
+        # 4. Verify remaining lease duration margin exceeds maximum consumer execution timeout plus safety budget
+        max_consumer_runtime = 300.0 if item_kind == "agent_task" else 30.0
+        required_lease_margin = max_consumer_runtime + 30.0
+
         lease_expires_at = item.get("lease_expires_at")
         if lease_expires_at is not None:
-            remaining_lease = float(lease_expires_at) - time.time()
-            if remaining_lease < 30.0:
-                logger.error(f"LEASE_EXPIRED_BEFORE_EXECUTION: Item {item_id} remaining lease margin ({remaining_lease:.1f}s) is less than required 30.0s.")
-                self.fail_item(item_id, lease_token, f"LEASE_EXPIRED_BEFORE_EXECUTION: remaining {remaining_lease:.1f}s", retryable=True)
+            exp_sec = parse_timestamp_to_seconds(lease_expires_at)
+            remaining_lease = exp_sec - time.time()
+            if remaining_lease < required_lease_margin:
+                logger.error(
+                    f"LEASE_EXPIRED_BEFORE_EXECUTION: Item {item_id} remaining lease margin ({remaining_lease:.1f}s) "
+                    f"is less than required {required_lease_margin:.1f}s budget."
+                )
+                self.fail_item(
+                    item_id,
+                    lease_token,
+                    f"LEASE_EXPIRED_BEFORE_EXECUTION: remaining {remaining_lease:.1f}s < required {required_lease_margin:.1f}s",
+                    retryable=True,
+                )
                 return False
 
-        # 4. Journal recovery check
+        # 5. Journal recovery check
         result_payload = {
             "status": "delivered",
             "processed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -435,7 +473,7 @@ class OutboundWorkerV2:
             result_payload["result_reference"] = res_ref
             return self.complete_item(item_id, lease_token, payload_hash, content_hash, result_payload)
 
-        # 5. Invoke routing consumer
+        # 6. Invoke routing consumer
         try:
             success, error_code_or_ref, res_dict = self.route_and_process(item, validated_payload)
         except FatalWorkerError:
@@ -547,7 +585,6 @@ class OutboundWorkerV2:
             for entry in pending:
                 item_id = entry["item_id"]
                 state = entry["state"]
-                res_ref = entry.get("result_reference") or item_id
 
                 try:
                     status_code, res_json = self._send_edge_rpc("cvn-outbound-status", {"item_id": item_id})
@@ -555,16 +592,13 @@ class OutboundWorkerV2:
                         remote_status = res_json.get("status")
                         logger.info(f"STARTUP_RECONCILIATION: Item {item_id} local state '{state}', remote status '{remote_status}'")
                         if remote_status == "completed":
+                            logger.info(f"STARTUP_RECONCILIATION: Marking item {item_id} as remote_completed based on authoritative remote status.")
                             self.journal.record_remote_complete(item_id)
-                        elif remote_status in ("claimed", "queued", "approved_pending_enqueue") and state == "consumer_succeeded_pending_remote_complete":
-                            # Retry completing remote item using recorded result reference
-                            result_payload = {
-                                "status": "delivered",
-                                "processed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                                "worker_id": self.worker_id,
-                                "result_reference": res_ref,
-                            }
-                            self.complete_item(item_id, "reconcile_token", entry["payload_hash"], entry["content_hash"], result_payload)
+                        else:
+                            logger.info(
+                                f"STARTUP_RECONCILIATION: Item {item_id} local state is '{state}', remote status is '{remote_status}'. "
+                                "Deferring remote completion to authentic reclaim."
+                            )
                     else:
                         logger.warning(f"STARTUP_RECONCILIATION: Status check RPC returned {status_code} for item {item_id}")
                 except Exception as rec_err:

@@ -3,6 +3,7 @@
 import json
 import logging
 from pathlib import Path
+import time
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
@@ -38,28 +39,30 @@ def test_missing_hmac_secret_raises_fatal_error(monkeypatch: pytest.MonkeyPatch)
     assert "CVN_WORKER_HMAC_SECRET" in str(exc_info.value)
 
 
-def test_record_only_routing_success(base_worker_env: None, temp_journal: WorkerJournal, tmp_path: Path) -> None:
+def test_production_claim_format_validation(base_worker_env: None, temp_journal: WorkerJournal, tmp_path: Path) -> None:
+    """Verifies that plain 64-hex payload_hash and ISO-8601 TIMESTAMPTZ lease_expires_at pass validation."""
     worker = OutboundWorkerV2(journal=temp_journal)
 
     content_data: Dict[str, Any] = {
-        "title": "Test Record Title",
+        "title": "Test Production Record Title",
         "category": "Notes",
         "summary": "Summary text",
     }
     _, valid_hash = compute_canonical_content_hash("record_only", "openclaw", content_data)
 
     item: Dict[str, Any] = {
-        "item_id": "rec-item-100",
+        "item_id": "rec-prod-100",
         "lease_token": "test_mock_lease_token_100",
-        "payload_hash": f"sha256:{valid_hash}",
+        "payload_hash": valid_hash,  # Plain 64-character lowercase hex string from DB
         "content_hash": valid_hash,
         "item_kind": "record_only",
         "target_agent": "openclaw",
+        "lease_expires_at": "2026-08-03T12:30:00Z",  # ISO-8601 TIMESTAMPTZ string from PostgreSQL/Edge
         "payload": {
             "schema_version": "cvn.outbound_item.v2",
             "item_kind": "record_only",
             "target_agent": "openclaw",
-            "item_id": "rec-item-100",
+            "item_id": "rec-prod-100",
             "source_device_id": "dev-01",
             "created_at": "2026-08-03T10:00:00Z",
             "content_hash": valid_hash,
@@ -73,24 +76,8 @@ def test_record_only_routing_success(base_worker_env: None, temp_journal: Worker
         },
     }
 
-    with patch.object(worker, "_send_edge_rpc") as mock_rpc, \
-         patch("app.destinations.record_consumer.get_app_data_dir", return_value=tmp_path):
-
-        mock_rpc.return_value = (200, {"completed": True})
-
-        processed = worker.process_item(item)
-        assert processed is True
-
-        # Check top-level result_reference passed to Edge RPC
-        call_args = mock_rpc.call_args[0]
-        assert call_args[0] == "cvn-complete-outbound-item"
-        assert "result_reference" in call_args[1]
-        assert call_args[1]["result_reference"] == "rec-item-100"
-
-        # Check journal state
-        journal_entry = temp_journal.get_entry("rec-item-100")
-        assert journal_entry is not None
-        assert journal_entry["state"] == "remote_completed"
+    validated_payload = worker.validate_claimed_item(item)
+    assert validated_payload["item_id"] == "rec-prod-100"
 
 
 def test_agent_task_routing_and_idempotency_headers(base_worker_env: None, temp_journal: WorkerJournal, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -106,10 +93,11 @@ def test_agent_task_routing_and_idempotency_headers(base_worker_env: None, temp_
     item: Dict[str, Any] = {
         "item_id": "agent-task-200",
         "lease_token": "test_mock_lease_token_200",
-        "payload_hash": f"sha256:{valid_hash}",
+        "payload_hash": valid_hash,
         "content_hash": valid_hash,
         "item_kind": "agent_task",
         "target_agent": "openclaw",
+        "lease_expires_at": time.time() + 600.0,
         "payload": {
             "schema_version": "cvn.outbound_item.v2",
             "item_kind": "agent_task",
@@ -133,18 +121,19 @@ def test_agent_task_routing_and_idempotency_headers(base_worker_env: None, temp_
         processed = worker.process_item(item)
         assert processed is True
 
-        # Verify Idempotency-Key headers and request payload idempotency_key passed to OpenClaw Gateway
+        # Verify Idempotency-Key headers and request payload idempotencyKey passed to OpenClaw Gateway
         assert mock_post.called
         post_kwargs = mock_post.call_args[1]
         headers = post_kwargs["headers"]
         req_json = post_kwargs["json"]
 
+        assert req_json.get("idempotencyKey") == "cvn-agent-task-200"
         assert req_json.get("idempotency_key") == "cvn-agent-task-200"
         assert headers.get("Idempotency-Key") == "cvn-agent-task-200"
         assert headers.get("X-Idempotency-Key") == "cvn-agent-task-200"
 
 
-def test_openclaw_unknown_outcome_transitions_journal_state(base_worker_env: None, temp_journal: WorkerJournal, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_openclaw_unknown_outcome_quarantine_prevents_reexecution(base_worker_env: None, temp_journal: WorkerJournal, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "test-gateway-token")
     worker = OutboundWorkerV2(journal=temp_journal)
 
@@ -154,17 +143,18 @@ def test_openclaw_unknown_outcome_transitions_journal_state(base_worker_env: Non
     _, valid_hash = compute_canonical_content_hash("agent_task", "openclaw", None, task_data)
 
     item: Dict[str, Any] = {
-        "item_id": "agent-task-unknown-outcome",
+        "item_id": "agent-task-quarantine-1",
         "lease_token": "test_mock_lease_token_unk",
-        "payload_hash": f"sha256:{valid_hash}",
+        "payload_hash": valid_hash,
         "content_hash": valid_hash,
         "item_kind": "agent_task",
         "target_agent": "openclaw",
+        "lease_expires_at": time.time() + 600.0,
         "payload": {
             "schema_version": "cvn.outbound_item.v2",
             "item_kind": "agent_task",
             "target_agent": "openclaw",
-            "item_id": "agent-task-unknown-outcome",
+            "item_id": "agent-task-quarantine-1",
             "content_hash": valid_hash,
             "task": task_data,
         },
@@ -173,40 +163,51 @@ def test_openclaw_unknown_outcome_transitions_journal_state(base_worker_env: Non
     with patch("app.destinations.openclaw_adapter.OpenClawAdapter.execute", side_effect=ExecutionTimeoutUnknown("Read timeout after POST")), \
          patch.object(worker, "fail_item") as mock_fail:
 
+        # Initial claim attempt times out
         processed = worker.process_item(item)
         assert processed is False
-
-        # Fail item MUST NOT be called (to prevent duplicate retry)
         assert not mock_fail.called
 
         # Journal state MUST be execution_outcome_unknown
-        entry = temp_journal.get_entry("agent-task-unknown-outcome")
+        entry = temp_journal.get_entry("agent-task-quarantine-1")
         assert entry is not None
         assert entry["state"] == "execution_outcome_unknown"
 
+    # Now simulate worker reclaiming the same item after lease expiration
+    reclaimed_item: Dict[str, Any] = dict(item)
+    reclaimed_item["lease_token"] = "test_new_reclaimed_lease_token_999"
+
+    with patch("app.destinations.openclaw_adapter.OpenClawAdapter.execute") as mock_execute:
+        # Reclaimed execution MUST be quarantined and refuse to execute OpenClaw again!
+        reclaim_processed = worker.process_item(reclaimed_item)
+        assert reclaim_processed is False
+        assert not mock_execute.called
+
 
 def test_lease_margin_expired_fails_claim(base_worker_env: None, temp_journal: WorkerJournal) -> None:
+    """Verifies that remaining lease duration less than max consumer runtime + safety margin is rejected."""
     worker = OutboundWorkerV2(journal=temp_journal)
 
-    content_data: Dict[str, Any] = {"title": "Expired Lease Note"}
-    _, valid_hash = compute_canonical_content_hash("record_only", "openclaw", content_data)
+    task_data: Dict[str, Any] = {
+        "instructions": json.dumps({"task_type": "classroom_note.summary", "payload": {"text": "Summarize note"}}),
+    }
+    _, valid_hash = compute_canonical_content_hash("agent_task", "openclaw", None, task_data)
 
-    import time
     item: Dict[str, Any] = {
         "item_id": "item-lease-margin-expired",
         "lease_token": "test_mock_lease_token_expired",
-        "payload_hash": f"sha256:{valid_hash}",
+        "payload_hash": valid_hash,
         "content_hash": valid_hash,
-        "item_kind": "record_only",
+        "item_kind": "agent_task",
         "target_agent": "openclaw",
-        "lease_expires_at": time.time() + 10.0,  # Only 10s remaining (< 30s required)
+        "lease_expires_at": time.time() + 200.0,  # 200s remaining (< 330s required for 300s max OpenClaw execution)
         "payload": {
             "schema_version": "cvn.outbound_item.v2",
-            "item_kind": "record_only",
+            "item_kind": "agent_task",
             "target_agent": "openclaw",
             "item_id": "item-lease-margin-expired",
             "content_hash": valid_hash,
-            "content": content_data,
+            "task": task_data,
         },
     }
 
@@ -226,7 +227,7 @@ def test_strict_claim_validation_target_mismatch(base_worker_env: None, temp_jou
     item: Dict[str, Any] = {
         "item_id": "item-target-mismatch",
         "lease_token": "test_mock_lease_token_mismatch",
-        "payload_hash": f"sha256:{'a' * 64}",
+        "payload_hash": "a" * 64,
         "content_hash": "b" * 64,
         "item_kind": "record_only",
         "target_agent": "auto",  # Forbidden target!
@@ -247,7 +248,7 @@ def test_strict_claim_validation_target_mismatch(base_worker_env: None, temp_jou
 
 def test_real_startup_status_reconciliation(base_worker_env: None, temp_journal: WorkerJournal) -> None:
     # 1. Populate journal with pending item
-    temp_journal.record_claim("reconcile-item-1", "sha256:" + "a" * 64, "b" * 64, "record_only")
+    temp_journal.record_claim("reconcile-item-1", "a" * 64, "b" * 64, "record_only")
     temp_journal.record_consumer_success("reconcile-item-1", "export_ref_101")
 
     worker = OutboundWorkerV2(journal=temp_journal)
@@ -286,10 +287,11 @@ def test_log_hygiene_redacts_secrets_and_leases(base_worker_env: None, temp_jour
     item: Dict[str, Any] = {
         "item_id": "item-log-hygiene",
         "lease_token": secret_lease,
-        "payload_hash": f"sha256:{valid_hash}",
+        "payload_hash": valid_hash,
         "content_hash": valid_hash,
         "item_kind": "record_only",
         "target_agent": "openclaw",
+        "lease_expires_at": time.time() + 600.0,
         "payload": {
             "schema_version": "cvn.outbound_item.v2",
             "item_kind": "record_only",

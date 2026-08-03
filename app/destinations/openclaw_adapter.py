@@ -121,6 +121,7 @@ class OpenClawAdapter:
             "model": f"openclaw/{self.config.get('agent_id', 'cvn-broker')}",
             "input": prompt,
             "user": f"cvn-task:{task_id}",
+            "idempotencyKey": f"cvn-{task_id}",
             "idempotency_key": f"cvn-{task_id}",
             "stream": False,
             "max_output_tokens": max_tokens,
