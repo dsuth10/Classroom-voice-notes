@@ -1,6 +1,7 @@
 """Unit tests for OutboundWorkerV2 daemon."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 import pytest
@@ -52,7 +53,7 @@ def test_worker_claim_and_process_item(tmp_path: Path) -> None:
         "lease_token": "test_mock_lease_token_12345",
         "payload_hash": valid_hash,
         "content_hash": valid_hash,
-        "lease_expires_at": "2026-08-03T12:30:00Z",
+        "lease_expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
         "payload_json": {
             "schema_version": "cvn.outbound_item.v2",
             "item_kind": "record_only",

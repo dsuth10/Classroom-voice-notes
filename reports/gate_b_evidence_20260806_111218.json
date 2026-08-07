@@ -1,0 +1,144 @@
+{
+  "metadata": {
+    "timestamp": "2026-08-06T11:12:18.655613+00:00",
+    "commit_sha": "fd18150e7f6cf29b04f3b3a2028f30d2c6b15856",
+    "worktree_clean": false,
+    "target": "local",
+    "scope": "Step 13 local pre-flight",
+    "gate_b_complete": false,
+    "validation_error": null
+  },
+  "local_regression_checks": [
+    {
+      "scenario_id": 1,
+      "name": "sharing_off_creates_no_local_outbound_state",
+      "node_id": "tests/unit/test_outbound_integration_pr12.py::test_pr12_sharing_off_creates_no_outbound_state",
+      "note": "Local-only coverage.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 2,
+      "name": "review_all_record_only_exports_csv",
+      "node_id": "tests/integration/test_outbound_sharing_e2e_pr10.py::test_full_outbound_sharing_e2e_flow",
+      "note": "Uses local stores and synthetic content.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 3,
+      "name": "openclaw_fake_gateway_acceptance",
+      "node_id": "tests/integration/test_openclaw_adapter_fake_gateway.py::TestOpenClawAdapterFakeGateway::test_fake_gateway_success",
+      "note": "Uses the controlled local fake gateway.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 4,
+      "name": "preview_approval_hash_identity",
+      "node_id": "tests/unit/test_outbound_review_dialog.py::test_dialog_save_edits_and_approve",
+      "note": "Does not prove a remote hash match.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 5,
+      "name": "rejection_keeps_item_unapproved",
+      "node_id": "tests/unit/test_outbound_review_dialog.py::test_dialog_approve_and_reject",
+      "note": "Does not make a remote request.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 6,
+      "name": "edited_content_recalculates_hash",
+      "node_id": "tests/unit/test_outbound_review_store.py::test_update_draft_updates_columns_and_recalculates_hash",
+      "note": "Local reassessment/storage coverage.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 7,
+      "name": "high_risk_trusted_mode_pauses",
+      "node_id": "tests/unit/test_outbound_integration_pr12.py::test_pr12_trusted_high_risk_pauses_for_review",
+      "note": "Does not prove server-side entitlement rejection.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 9,
+      "name": "wrong_policy_or_high_risk_pauses",
+      "node_id": "tests/unit/test_outbound_assessment_pr5.py::test_trusted_mode_pauses_on_v2_high_risk",
+      "note": "Local policy coverage.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 10,
+      "name": "pending_submission_recovery",
+      "node_id": "tests/unit/test_external_agent_dispatcher.py::test_retry_pending_generates_fresh_request_nonces_per_attempt",
+      "note": "Does not simulate a deployed Edge response.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 11,
+      "name": "exact_outbox_retry_is_idempotent",
+      "node_id": "tests/unit/test_worker_edge_lifecycle.py::test_outbox_submission_retry_idempotency",
+      "note": "Local durable-outbox coverage.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 12,
+      "name": "unknown_openclaw_outcome_is_quarantined",
+      "node_id": "tests/unit/test_outbound_worker_v2_step9.py::test_openclaw_unknown_outcome_quarantine_prevents_reexecution",
+      "note": "Worker restart/reclaim coverage remains a staging requirement.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 13,
+      "name": "post_commit_retry_avoids_duplicate_record",
+      "node_id": "tests/unit/test_record_concurrency_failure.py::test_crash_after_commit_returns_idempotent_success",
+      "note": "Record consumer only.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 14,
+      "name": "insufficient_or_mismatched_lease_is_rejected",
+      "node_id": "tests/unit/test_outbound_worker_v2_step9.py::test_lease_margin_expired_fails_claim",
+      "note": "Does not prove a second real worker claim.",
+      "status": "PASSED",
+      "summary": "Exact regression test passed",
+      "returncode": 0
+    },
+    {
+      "scenario_id": 15,
+      "name": "local_edge_signature_and_nonce_replay_rejection",
+      "node_id": "tests/integration/test_local_v2_edge_auth.py::test_local_v2_edge_rejects_replayed_request_nonce",
+      "note": "Real local Edge Function authentication coverage.",
+      "status": "FAILED",
+      "summary": "Required test failed",
+      "returncode": 1
+    }
+  ],
+  "remaining_gate_b_requirements": [
+    "Dedicated staging proof is required for all 20 Gate B scenarios.",
+    "Scenarios 17\u201320 require recorded operational rehearsals: monitoring, retention/restore, emergency disable, credential rotation and rollback.",
+    "Gate C governance approval is separate from Gate B."
+  ]
+}

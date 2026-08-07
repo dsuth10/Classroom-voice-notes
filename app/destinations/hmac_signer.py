@@ -29,7 +29,10 @@ def create_client_request_headers(
     from urllib.parse import urlparse
 
     parsed = urlparse(endpoint_url)
-    path = parsed.path or "/functions/v1/cvn-submit-outbound-item"
+    function_name = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+    if not function_name:
+        raise ValueError("endpoint_url must identify an Edge Function")
+    path = f"/{function_name}"
     ts = timestamp or str(int(time.time()))
     n = nonce or uuid.uuid4().hex
 

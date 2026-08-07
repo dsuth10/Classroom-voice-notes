@@ -19,7 +19,9 @@ import pytest
 
 # Target staging project ref only — never production
 PROJECT_REF = "ukqkkgzimhtjhlnmlyao"
-BASE_URL = f"https://{PROJECT_REF}.supabase.co/functions/v1"
+BASE_URL = os.environ.get(
+    "CVN_TEST_BASE_URL", f"https://{PROJECT_REF}.supabase.co/functions/v1"
+).rstrip("/")
 
 MISSING_ENV = False
 def _get_env(name: str) -> str:

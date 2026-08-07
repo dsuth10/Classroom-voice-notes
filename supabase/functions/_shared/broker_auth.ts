@@ -59,6 +59,13 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return result === 0;
 }
 
+function canonicalFunctionPath(req: Request): string {
+  const segments = new URL(req.url).pathname.split("/").filter(Boolean);
+  const functionName = segments.at(-1);
+  if (!functionName) throw new AuthenticationError("Invalid function path");
+  return `/${functionName}`;
+}
+
 export async function authenticateWorker(
   req: Request,
   rawBodyOrCanonicalString: string,
@@ -184,9 +191,9 @@ export async function authenticateWorker(
   }
 
   // 4. 5-Element Canonical HMAC Signature Verification: METHOD|PATH|TIMESTAMP|NONCE|BODY
-  const url = new URL(req.url);
-  const canonicalString =
-    `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${rawBodyOrCanonicalString}`;
+  const canonicalString = `${req.method.toUpperCase()}|${
+    canonicalFunctionPath(req)
+  }|${timestampStr}|${nonce}|${rawBodyOrCanonicalString}`;
   const expectedSig = await hmacSha256Hex(
     canonicalString,
     keyConfig.hmac_secret,

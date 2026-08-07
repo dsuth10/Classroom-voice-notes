@@ -150,6 +150,8 @@ END;
 $$;
 
 -- 5. Update cvn_claim_outbound_item with Hashed Lease & next_attempt_at Checking
+DROP FUNCTION IF EXISTS public.cvn_claim_outbound_item(text, int, text[], text[], text);
+
 CREATE OR REPLACE FUNCTION public.cvn_claim_outbound_item(
     p_worker_id TEXT,
     p_visibility_timeout_seconds INT DEFAULT 300,
@@ -158,7 +160,7 @@ CREATE OR REPLACE FUNCTION public.cvn_claim_outbound_item(
 ) RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pgmq
+SET search_path = public, extensions, pgmq
 AS $$
 DECLARE
     v_item RECORD;
@@ -188,7 +190,7 @@ BEGIN
     END IF;
 
     -- Generate 256 bits (32 bytes) cryptographically secure random lease token
-    v_lease_token := 'cvn-lease-' || encode(gen_random_bytes(32), 'hex');
+    v_lease_token := 'cvn-lease-' || encode(extensions.gen_random_bytes(32), 'hex');
     v_lease_token_hash := encode(sha256(convert_to(v_lease_token, 'UTF8')), 'hex');
     v_lease_expires := now() + (p_visibility_timeout_seconds || ' seconds')::interval;
 

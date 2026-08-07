@@ -96,7 +96,7 @@ class TestOpenClawAdapterFakeGateway(unittest.TestCase):
 
     def test_fake_gateway_unreachable(self):
         bad_config = self.config.copy()
-        bad_config["gateway_url"] = "http://127.0.0.1:54321"  # Unused port
+        bad_config["gateway_url"] = "http://127.0.0.1:59999"  # Unused port
         bad_adapter = OpenClawAdapter(bad_config, "fake-token")
 
         req = {

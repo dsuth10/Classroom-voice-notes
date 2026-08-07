@@ -20,6 +20,8 @@ ALTER TABLE public.cvn_trusted_devices DROP CONSTRAINT IF EXISTS check_environme
 ALTER TABLE public.cvn_trusted_devices ADD CONSTRAINT check_environment_valid CHECK (environment IN ('staging', 'production'));
 
 -- Updated RPC: cvn_evaluate_trusted_entitlement with required_policy_version checking and safe error reason codes
+DROP FUNCTION IF EXISTS public.cvn_evaluate_trusted_entitlement(text, text, text, text, text, text);
+
 CREATE OR REPLACE FUNCTION public.cvn_evaluate_trusted_entitlement(
     p_client_key_id TEXT,
     p_source_device_id TEXT,

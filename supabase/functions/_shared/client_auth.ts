@@ -50,6 +50,15 @@ export async function sha256Hex(s: string): Promise<string> {
     .join("");
 }
 
+function canonicalFunctionPath(req: Request): string {
+  const segments = new URL(req.url).pathname.split("/").filter(Boolean);
+  const functionName = segments.at(-1);
+  if (!functionName) {
+    throw new ClientAuthenticationError("Invalid function path");
+  }
+  return `/${functionName}`;
+}
+
 const MAX_TIMESTAMP_AGE_SECONDS = 300;
 
 /**
@@ -136,9 +145,9 @@ export async function authenticateClient(
       throw new ClientAuthenticationError("Invalid bearer token");
     }
 
-    const url = new URL(req.url);
-    const canonicalSigText =
-      `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
+    const canonicalSigText = `${req.method.toUpperCase()}|${
+      canonicalFunctionPath(req)
+    }|${timestampStr}|${nonce}|${bodyText}`;
 
     const expectedSig = await hmacSha256Hex(
       canonicalSigText,
@@ -199,9 +208,9 @@ export async function authenticateClient(
     throw new ClientAuthenticationError("Invalid bearer token");
   }
 
-  const url = new URL(req.url);
-  const canonicalSigText =
-    `${req.method.toUpperCase()}|${url.pathname}|${timestampStr}|${nonce}|${bodyText}`;
+  const canonicalSigText = `${req.method.toUpperCase()}|${
+    canonicalFunctionPath(req)
+  }|${timestampStr}|${nonce}|${bodyText}`;
 
   const expectedSig = await hmacSha256Hex(canonicalSigText, envHmac);
   if (!timingSafeEqual(signature.toLowerCase(), expectedSig.toLowerCase())) {

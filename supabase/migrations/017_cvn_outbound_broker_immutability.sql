@@ -50,6 +50,8 @@ CREATE TRIGGER trg_prevent_outbound_item_immutability
     EXECUTE FUNCTION public.cvn_prevent_outbound_item_immutability_violation();
 
 -- 4. Worker Claim RPC with target_agent binding and safe worker payload return
+DROP FUNCTION IF EXISTS public.cvn_claim_outbound_item(text, int, text[], text[], text);
+
 CREATE OR REPLACE FUNCTION public.cvn_claim_outbound_item(
     p_worker_id TEXT,
     p_visibility_timeout_seconds INT DEFAULT 300,
@@ -113,6 +115,9 @@ END;
 $$;
 
 -- 5. Complete RPC with Content/Payload Hash Match Verification
+DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item(text, text, jsonb);
+DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item(text, text, text, jsonb);
+
 CREATE OR REPLACE FUNCTION public.cvn_complete_outbound_item(
     p_item_id TEXT,
     p_worker_id TEXT,
@@ -167,6 +172,9 @@ END;
 $$;
 
 -- 6. Fail RPC with Content/Payload Hash Match Verification
+DROP FUNCTION IF EXISTS public.cvn_fail_outbound_item(text, text, text, boolean, int);
+DROP FUNCTION IF EXISTS public.cvn_fail_outbound_item(text, text, text, text, boolean, int);
+
 CREATE OR REPLACE FUNCTION public.cvn_fail_outbound_item(
     p_item_id TEXT,
     p_worker_id TEXT,
@@ -229,6 +237,8 @@ END;
 $$;
 
 -- 7. Device-Scoped Status Lookup RPC
+DROP FUNCTION IF EXISTS public.cvn_get_outbound_item_status(text);
+
 CREATE OR REPLACE FUNCTION public.cvn_get_outbound_item_status(
     p_item_id TEXT,
     p_source_device_id TEXT DEFAULT NULL

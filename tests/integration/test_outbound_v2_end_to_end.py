@@ -9,6 +9,7 @@ Validates the full v2 pipeline:
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
@@ -114,7 +115,7 @@ def test_full_v2_outbound_lifecycle_integration(tmp_path: Path, monkeypatch: pyt
         "lease_token": "test_mock_lease_token_e2e_99",
         "payload_hash": valid_hash,
         "content_hash": valid_hash,
-        "lease_expires_at": "2026-08-03T12:30:00Z",
+        "lease_expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
         "payload_json": payload_json,
     }).encode("utf-8")
     mock_resp_claim.__enter__.return_value = mock_resp_claim

@@ -77,7 +77,7 @@ def test_worker_hmac_header_construction() -> None:
         worker_id="worker-unit-1",
     )
 
-    headers = worker._make_headers("POST", "/functions/v1/cvn-claim-outbound-item", '{"test":1}')
+    headers = worker._make_headers("POST", "/cvn-claim-outbound-item", '{"test":1}')
 
     assert headers["Authorization"] == "Bearer secret-bearer-123"
     assert headers["X-CVN-Key-Id"] == "worker-unit-1"
@@ -99,7 +99,7 @@ def test_worker_5_element_hmac_canonical_calculation() -> None:
         worker_id="worker-unit-1",
     )
 
-    path = "/functions/v1/cvn-claim-outbound-item"
+    path = "/cvn-claim-outbound-item"
     body = '{"test":1}'
     headers = worker._make_headers("POST", path, body)
 

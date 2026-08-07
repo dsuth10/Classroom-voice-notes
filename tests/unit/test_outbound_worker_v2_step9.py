@@ -4,6 +4,7 @@ import json
 import logging
 from pathlib import Path
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
@@ -57,7 +58,7 @@ def test_production_claim_format_validation(base_worker_env: None, temp_journal:
         "content_hash": valid_hash,
         "item_kind": "record_only",
         "target_agent": "openclaw",
-        "lease_expires_at": "2026-08-03T12:30:00Z",  # ISO-8601 TIMESTAMPTZ string from PostgreSQL/Edge
+        "lease_expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
         "payload": {
             "schema_version": "cvn.outbound_item.v2",
             "item_kind": "record_only",

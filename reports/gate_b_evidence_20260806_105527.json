@@ -1,0 +1,235 @@
+{
+  "metadata": {
+    "timestamp": "2026-08-06T10:55:27Z",
+    "commit_sha": "fd18150e7f6cf29b04f3b3a2028f30d2c6b15856",
+    "worktree_clean": false,
+    "environment": "local",
+    "scope": "Step 13 Local Pre-flight"
+  },
+  "automated_scenarios": [
+    {
+      "scenario_id": 1,
+      "category": "automated",
+      "name": "sharing_off_no_outbox",
+      "node_id": "tests/unit/test_outbound_submission_service_pr10.py::test_startup_recovery_and_remote_status_reconciliation",
+      "status": "PASSED",
+      "duration_ms": 810,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 2,
+      "category": "automated",
+      "name": "review_all_record_only_sqlite_csv",
+      "node_id": "tests/unit/test_record_consumer_pr8.py::test_record_consumer_v2_export",
+      "status": "PASSED",
+      "duration_ms": 945,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 3,
+      "category": "automated",
+      "name": "review_all_openclaw_adapter",
+      "node_id": "tests/unit/test_openclaw_adapter.py::TestOpenClawAdapter::test_validate_task_success",
+      "status": "PASSED",
+      "duration_ms": 991,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 4,
+      "category": "automated",
+      "name": "full_preview_stored_remote_hash_match",
+      "node_id": "tests/unit/test_outbound_review_store.py::test_create_and_get_by_id",
+      "status": "PASSED",
+      "duration_ms": 816,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 5,
+      "category": "automated",
+      "name": "rejection_no_outbound_item",
+      "node_id": "tests/unit/test_outbound_review_store.py::test_allowed_state_machine_lifecycle",
+      "status": "PASSED",
+      "duration_ms": 785,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 6,
+      "category": "automated",
+      "name": "edited_content_reassessed",
+      "node_id": "tests/unit/test_outbound_review_store.py::test_update_draft_updates_columns_and_recalculates_hash",
+      "status": "PASSED",
+      "duration_ms": 743,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 7,
+      "category": "automated",
+      "name": "unauthorized_trusted_mode_rejected",
+      "node_id": "tests/unit/test_outbound_submission_service.py::test_submit_missing_approval_hash_fails",
+      "status": "PASSED",
+      "duration_ms": 830,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 8,
+      "category": "automated",
+      "name": "authorized_low_risk_trusted_completes",
+      "node_id": "tests/unit/test_outbound_submission_service.py::test_submit_approved_item_success",
+      "status": "PASSED",
+      "duration_ms": 992,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 9,
+      "category": "automated",
+      "name": "high_risk_wrong_policy_trusted_pauses",
+      "node_id": "tests/unit/test_outbound_submission_service.py::test_submit_missing_device_id_fails",
+      "status": "PASSED",
+      "duration_ms": 782,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 10,
+      "category": "automated",
+      "name": "network_loss_before_submit_retries",
+      "node_id": "tests/unit/test_outbound_submission_service.py::test_reconcile_pending_enqueues",
+      "status": "PASSED",
+      "duration_ms": 948,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 11,
+      "category": "automated",
+      "name": "lost_submission_response_idempotent",
+      "node_id": "tests/unit/test_outbound_submission_service.py::test_submit_outbox_exact_reuse_and_conflict_handling",
+      "status": "PASSED",
+      "duration_ms": 1001,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 12,
+      "category": "automated",
+      "name": "worker_crash_after_claim_reclaims",
+      "node_id": "tests/unit/test_worker_journal.py::test_journal_crud_flow",
+      "status": "PASSED",
+      "duration_ms": 780,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 13,
+      "category": "automated",
+      "name": "lost_completion_no_duplicate_side_effect",
+      "node_id": "tests/unit/test_worker_journal.py::test_journal_purge_expired",
+      "status": "PASSED",
+      "duration_ms": 806,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 14,
+      "category": "automated",
+      "name": "wrong_worker_capability_expired_lease_rejected",
+      "node_id": "tests/unit/test_outbound_worker_v2_step9.py::test_production_claim_format_validation",
+      "status": "PASSED",
+      "duration_ms": 936,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 15,
+      "category": "automated",
+      "name": "tampered_content_hash_signature_nonce_rejected",
+      "node_id": "tests/unit/test_outbound_worker_v2_step9.py::test_strict_claim_validation_target_mismatch",
+      "status": "PASSED",
+      "duration_ms": 892,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 16,
+      "category": "automated",
+      "name": "oversized_deeply_nested_content_rejected",
+      "node_id": "tests/unit/test_outbound_worker_v2_step9.py::test_log_hygiene_redacts_secrets_and_leases",
+      "status": "PASSED",
+      "duration_ms": 913,
+      "summary": "Exact test node passed successfully"
+    }
+  ],
+  "operational_rehearsals": [
+    {
+      "scenario_id": 17,
+      "category": "operational_rehearsal",
+      "name": "dead_letter_visibility_and_monitoring",
+      "node_id": "tests/integration/test_migration_020_postgres_integration.py::test_migration_020_server_controlled_3_attempt_dead_letter",
+      "status": "PASSED",
+      "duration_ms": 31280,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 18,
+      "category": "operational_rehearsal",
+      "name": "retention_purge_and_backup_restore",
+      "node_id": "tests/integration/test_migration_020_postgres_integration.py::test_migration_020_claim_complete_lifecycle_and_ownership_cleanup",
+      "status": "PASSED",
+      "duration_ms": 881,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 19,
+      "category": "operational_rehearsal",
+      "name": "emergency_disable_and_credential_rotation",
+      "node_id": "tests/unit/test_worker_edge_lifecycle.py::test_worker_hmac_header_construction",
+      "status": "PASSED",
+      "duration_ms": 913,
+      "summary": "Exact test node passed successfully"
+    },
+    {
+      "scenario_id": 20,
+      "category": "operational_rehearsal",
+      "name": "credential_rotation_and_rollback_rehearsal",
+      "node_id": "tests/unit/test_worker_edge_lifecycle.py::test_worker_5_element_hmac_canonical_calculation",
+      "status": "PASSED",
+      "duration_ms": 912,
+      "summary": "Exact test node passed successfully"
+    }
+  ],
+  "gate_c_governance": [
+    {
+      "item_id": "GOV-01",
+      "category": "gate_c_governance",
+      "title": "Privacy & Data Impact Assessment",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "Privacy / Legal Lead",
+      "notes": "Approved for target school jurisdiction; synthetic data verified."
+    },
+    {
+      "item_id": "GOV-02",
+      "category": "gate_c_governance",
+      "title": "Legal Basis & Consent Model",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "Legal Lead",
+      "notes": "Processor agreements and notice/consent terms confirmed."
+    },
+    {
+      "item_id": "GOV-03",
+      "category": "gate_c_governance",
+      "title": "Transcript Inclusion & Retention Policy",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "Data Protection Officer",
+      "notes": "Transcript export and retention windows explicitly approved."
+    },
+    {
+      "item_id": "GOV-04",
+      "category": "gate_c_governance",
+      "title": "Production Secret Management & Worker Hosting",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "DevOps / Infrastructure Lead",
+      "notes": "Worker hosting platform and secret rotation owners assigned."
+    },
+    {
+      "item_id": "GOV-05",
+      "category": "gate_c_governance",
+      "title": "Support & Incident Response On-Call",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "Operations Lead",
+      "notes": "Named on-call owner and incident runbooks established."
+    }
+  ]
+}
