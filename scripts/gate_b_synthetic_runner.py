@@ -19,13 +19,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 
 ROOT_DIR = Path(__file__).parent.parent
 REPORT_DIR = ROOT_DIR / "reports"
 LOCAL_API_URL = "http://127.0.0.1:54321"
-STAGING_HOST = "ukqkkgzimhtjhlnmlyao.supabase.co"
 
 
 @dataclass(frozen=True)
@@ -46,6 +44,7 @@ LOCAL_CHECKS = (
     LocalCheck(5, "rejection_keeps_item_unapproved", "tests/unit/test_outbound_review_dialog.py::test_dialog_approve_and_reject", "Does not make a remote request."),
     LocalCheck(6, "edited_content_recalculates_hash", "tests/unit/test_outbound_review_store.py::test_update_draft_updates_columns_and_recalculates_hash", "Local reassessment/storage coverage."),
     LocalCheck(7, "high_risk_trusted_mode_pauses", "tests/unit/test_outbound_integration_pr12.py::test_pr12_trusted_high_risk_pauses_for_review", "Does not prove server-side entitlement rejection."),
+    LocalCheck(8, "trusted_low_risk_creates_authorised_release", "tests/unit/test_outbound_routing_service.py::test_routing_mode_trusted_auto_low_risk", "Exercises the local trusted-release decision; it does not prove a staging entitlement or remote completion."),
     LocalCheck(9, "wrong_policy_or_high_risk_pauses", "tests/unit/test_outbound_assessment_pr5.py::test_trusted_mode_pauses_on_v2_high_risk", "Local policy coverage."),
     LocalCheck(10, "pending_submission_recovery", "tests/unit/test_external_agent_dispatcher.py::test_retry_pending_generates_fresh_request_nonces_per_attempt", "Does not simulate a deployed Edge response."),
     LocalCheck(11, "exact_outbox_retry_is_idempotent", "tests/unit/test_worker_edge_lifecycle.py::test_outbox_submission_retry_idempotency", "Local durable-outbox coverage."),
@@ -53,6 +52,7 @@ LOCAL_CHECKS = (
     LocalCheck(13, "post_commit_retry_avoids_duplicate_record", "tests/unit/test_record_concurrency_failure.py::test_crash_after_commit_returns_idempotent_success", "Record consumer only."),
     LocalCheck(14, "insufficient_or_mismatched_lease_is_rejected", "tests/unit/test_outbound_worker_v2_step9.py::test_lease_margin_expired_fails_claim", "Does not prove a second real worker claim."),
     LocalCheck(15, "local_edge_signature_and_nonce_replay_rejection", "tests/integration/test_local_v2_edge_auth.py::test_local_v2_edge_rejects_replayed_request_nonce", "Real local Edge Function authentication coverage."),
+    LocalCheck(16, "local_edge_rejects_oversized_and_deeply_nested_content", "tests/integration/test_local_v2_edge_auth.py::test_local_v2_edge_rejects_oversized_and_deeply_nested_payloads", "Real local Edge Function payload-boundary coverage."),
 )
 
 
@@ -62,7 +62,7 @@ def git_state() -> tuple[str, bool]:
     return sha, not dirty
 
 
-def local_test_environment() -> dict[str, str]:
+def local_preflight_environment() -> dict[str, str]:
     """Load only ignored local test settings, without logging their values."""
     env = os.environ.copy()
     env["QT_QPA_PLATFORM"] = "offscreen"
@@ -89,19 +89,11 @@ def local_test_environment() -> dict[str, str]:
     return env
 
 
-def validate_target(target: str, env: dict[str, str]) -> str:
-    if target == "local":
-        url = env.get("SUPABASE_URL", LOCAL_API_URL).rstrip("/")
-        if url != LOCAL_API_URL:
-            raise ValueError(f"Local pre-flight requires SUPABASE_URL={LOCAL_API_URL}")
-        return url
-
-    if env.get("CVN_BROKER_ENV") != "staging":
-        raise ValueError("Formal Gate B requires CVN_BROKER_ENV=staging")
-    url = env.get("SUPABASE_URL", "").rstrip("/")
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname != STAGING_HOST:
-        raise ValueError("Formal Gate B requires the approved remote staging Supabase URL")
+def validate_local_target(env: dict[str, str]) -> str:
+    """Ensure the runner cannot accidentally use a remote Supabase project."""
+    url = env.get("SUPABASE_URL", LOCAL_API_URL).rstrip("/")
+    if url != LOCAL_API_URL:
+        raise ValueError(f"Local pre-flight requires SUPABASE_URL={LOCAL_API_URL}")
     return url
 
 
@@ -172,16 +164,26 @@ def main() -> int:
     parser.add_argument("--allow-dirty", action="store_true")
     args = parser.parse_args()
     sha, clean = git_state()
+    if args.env == "staging" and args.allow_dirty:
+        print("--allow-dirty is permitted only for local pre-flight; staging evidence requires a clean worktree.")
+        return 1
     if not clean and not args.allow_dirty:
         print("Refusing release evidence from a dirty worktree. Use --allow-dirty only for local pre-flight.")
         return 1
 
-    env = local_test_environment()
     validation_error = None
-    try:
-        validate_target(args.env, env)
-    except ValueError as error:
-        validation_error = str(error)
+    if args.env == "staging":
+        validation_error = (
+            "Formal Gate B staging is not implemented by this local runner. "
+            "Use docs/gate-b-staging-evidence.md and the dedicated staging harness."
+        )
+        env: dict[str, str] = {}
+    else:
+        env = local_preflight_environment()
+        try:
+            validate_local_target(env)
+        except ValueError as error:
+            validation_error = str(error)
 
     results: list[dict[str, Any]] = []
     if validation_error is None:
