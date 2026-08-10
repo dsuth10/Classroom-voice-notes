@@ -1,8 +1,11 @@
 import asyncio
+import json
 import os
 import shutil
 import re
-from datetime import datetime
+from datetime import datetime, timezone
+
+
 from pathlib import Path
 from typing import Any
 from PySide6.QtCore import QThread, Signal
@@ -124,8 +127,8 @@ class PipelineWorker(QThread):
                 dispatcher.dispatch(transcript, classification, note_path)
             
             # 5b. Central outbound routing service (handles off, safe_auto, review_all, trusted_auto)
-            from datetime import timezone
             from app.destinations.outbound_routing_service import OutboundRoutingService
+
             routing_service = OutboundRoutingService(self.settings_manager)
             routing_service.handle_capture(
                 classification=classification,
@@ -149,11 +152,28 @@ class PipelineWorker(QThread):
             self.finished_pipeline.emit(note_path)
             
         except Exception as e:
-            # Clean up temporary audio file if failure occurs to avoid orphaned files on disk
+            # Preserve failed recording audio in recovery directory rather than deleting
             if os.path.exists(self.wav_path):
                 try:
-                    os.remove(self.wav_path)
-                except Exception:
-                    pass
+                    from app.utils.paths import get_failed_audio_dir
+                    failed_dir = get_failed_audio_dir()
+                    failed_dir.mkdir(parents=True, exist_ok=True)
+                    dest_path = failed_dir / Path(self.wav_path).name
+                    shutil.move(self.wav_path, dest_path)
+
+                    
+                    # Write diagnostic metadata sidecar
+                    meta_path = failed_dir / f"{Path(self.wav_path).stem}.error.json"
+                    meta_data = {
+                        "failed_at": datetime.now(timezone.utc).isoformat(),
+                        "duration_seconds": self.duration_seconds,
+                        "original_path": self.wav_path,
+                        "error": str(e),
+                    }
+                    meta_path.write_text(json.dumps(meta_data, indent=2), encoding="utf-8")
+                    log_audit_event("AUDIO_PRESERVED_ON_FAILURE", "session", f"Preserved failed recording to {dest_path}")
+                except Exception as preservation_err:
+                    log_audit_event("AUDIO_PRESERVATION_ERROR", "session", f"Failed to preserve WAV: {preservation_err}")
             log_audit_event("PIPELINE_ERROR", "session", f"Pipeline execution failed: {e}")
             self.error_occurred.emit(str(e))
+

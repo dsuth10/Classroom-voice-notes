@@ -291,6 +291,23 @@ class SettingsManager:
                 mode = value if isinstance(value, str) and value in valid_modes else "off"
                 ext["sharing_mode"] = mode
                 ext["enabled"] = (mode != "off")
+        elif key == "ollama_url":
+            if not is_loopback_url(str(value)):
+                raise ValueError(f"Ollama URL must point to local loopback (localhost, 127.0.0.1, ::1). Got: {value}")
 
         self.save_settings(self.settings)
+
+from urllib.parse import urlparse
+
+def is_loopback_url(url: str) -> bool:
+    """Returns True if the URL points strictly to a local loopback address (localhost, 127.0.0.1, ::1)."""
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url if "://" in url else f"http://{url}")
+        hostname = (parsed.hostname or "").lower()
+        return hostname in {"localhost", "127.0.0.1", "::1"}
+    except Exception:
+        return False
+
 

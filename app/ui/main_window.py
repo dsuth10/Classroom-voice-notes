@@ -452,7 +452,18 @@ class MainWindow(QMainWindow):
         cmd_keywords_str = self.cmd_keywords_edit.text().strip()
         cmd_keywords = [k.strip() for k in cmd_keywords_str.split(",") if k.strip()]
 
+        from app.config.settings import is_loopback_url
+        if not is_loopback_url(ollama_url):
+            QMessageBox.critical(
+                self,
+                "Invalid Ollama Endpoint",
+                "Ollama URL must point to local loopback (localhost, 127.0.0.1, or ::1).\n\n"
+                "External host URLs are blocked to protect classroom privacy."
+            )
+            return
+
         # Graceful model validation dialogues
+
         if wake_enabled and wake_engine == "openwakeword":
             if not wake_model or not Path(wake_model).exists():
                 confirm = QMessageBox.question(

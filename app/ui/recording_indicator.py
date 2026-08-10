@@ -1,14 +1,16 @@
 from typing import Any
 from PySide6.QtCore import Qt, QPoint, QTimer, Signal
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame, QMenu
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QFrame, QMenu, QApplication
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication
 
 class RecordingIndicator(QWidget):
     open_settings_requested = Signal()
     generate_daily_summary_requested = Signal()
     rebuild_index_requested = Signal()
     retry_outbox_requested = Signal()
+    start_recording_requested = Signal()
+    save_recording_requested = Signal()
+    cancel_recording_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -30,82 +32,98 @@ class RecordingIndicator(QWidget):
             Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setFixedSize(160, 45)
-        
-        # Style sheet for dark glassmorphic card design
-        self.background_frame = QFrame(self)
-        self.background_frame.setGeometry(0, 0, 160, 45)
-        self.background_frame.setStyleSheet("""
-            QFrame {
-                background-color: rgba(30, 30, 30, 210);
-                border: 1px solid rgba(255, 255, 255, 40);
-                border-radius: 8px;
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+
+        # Container frame for styling
+        self.frame = QFrame(self)
+        self.frame.setObjectName("containerFrame")
+        frame_layout = QHBoxLayout(self.frame)
+        frame_layout.setContentsMargins(8, 4, 8, 4)
+        frame_layout.setSpacing(6)
+
+        # Status Dot (Visual Indicator)
+        self.dot = QFrame(self.frame)
+        self.dot.setFixedSize(10, 10)
+        self.dot.setObjectName("statusDot")
+        frame_layout.addWidget(self.dot)
+
+        # Status Label
+        self.label = QLabel("Idle", self.frame)
+        self.label.setObjectName("statusLabel")
+        frame_layout.addWidget(self.label)
+
+        layout.addWidget(self.frame)
+
+        self.apply_style()
+
+    def apply_style(self) -> None:
+        self.setStyleSheet("""
+            #containerFrame {
+                background-color: rgba(30, 30, 30, 220);
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 12px;
+            }
+            #statusLabel {
+                color: #FFFFFF;
+                font-family: 'Segoe UI', sans-serif;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            #statusDot {
+                border-radius: 5px;
             }
         """)
-        
-        layout = QHBoxLayout(self.background_frame)
-        layout.setContentsMargins(10, 5, 10, 5)
-        
-        # Visual flashing dot
-        self.dot = QFrame()
-        self.dot.setFixedSize(12, 12)
-        self.dot.setStyleSheet("background-color: rgb(150, 150, 150); border-radius: 6px;")
-        layout.addWidget(self.dot)
-        
-        # State label
-        self.label = QLabel("Idle Listening")
-        self.label.setStyleSheet("color: white; font-family: Outfit, Inter, Arial; font-size: 11px; font-weight: bold;")
-        layout.addWidget(self.label)
-        
-        self.set_state("IDLE")
 
     def set_state(self, state: str) -> None:
-        """Transitions widget state and updates UI immediately."""
         self.state = state.upper()
-        self.indicator_visible = True
-        self.dot.setVisible(True)
+        self.elapsed_seconds = 0.0
         
         if self.state in ("IDLE", "IDLE_LISTENING"):
             self.flash_timer.stop()
-            self.label.setText("Idle Listening")
-            self.dot.setStyleSheet("background-color: rgb(120, 120, 120); border-radius: 6px;")
+            self.dot.setVisible(True)
+            self.dot.setStyleSheet("background-color: #34C759; border-radius: 5px;") # Green
+            self.label.setText("Listening")
         elif self.state == "RECORDING":
-            self.elapsed_seconds = 0.0
-            self.label.setText("Recording... 0s")
-            self.dot.setStyleSheet("background-color: rgb(0, 220, 0); border-radius: 6px;")
-            self.flash_timer.start(500)  # flash every 500ms
+            self.dot.setStyleSheet("background-color: #FF3B30; border-radius: 5px;") # Red
+            self.label.setText("Recording 00:00")
+            if not self.flash_timer.isActive():
+                self.flash_timer.start(500)
         elif self.state == "TRANSCRIBING":
             self.flash_timer.stop()
+            self.dot.setVisible(True)
+            self.dot.setStyleSheet("background-color: #FFCC00; border-radius: 5px;") # Yellow
             self.label.setText("Transcribing...")
-            self.dot.setStyleSheet("background-color: rgb(220, 180, 0); border-radius: 6px;")
         elif self.state == "CLASSIFYING":
             self.flash_timer.stop()
+            self.dot.setVisible(True)
+            self.dot.setStyleSheet("background-color: #FFCC00; border-radius: 5px;") # Yellow
             self.label.setText("Classifying...")
-            self.dot.setStyleSheet("background-color: rgb(220, 100, 0); border-radius: 6px;")
-        elif self.state in ("SAVING", "ROUTING"):
+        elif self.state in ("SAVING", "ROUTING", "WRITING_OUTPUT"):
             self.flash_timer.stop()
+            self.dot.setVisible(True)
+            self.dot.setStyleSheet("background-color: #FFCC00; border-radius: 5px;") # Yellow
             self.label.setText("Saving Note...")
-            self.dot.setStyleSheet("background-color: rgb(0, 120, 220); border-radius: 6px;")
         elif self.state == "ERROR":
             self.flash_timer.stop()
+            self.dot.setVisible(True)
+            self.dot.setStyleSheet("background-color: #FF9500; border-radius: 5px;") # Orange
             self.label.setText("Pipeline Error")
-            self.dot.setStyleSheet("background-color: rgb(220, 0, 0); border-radius: 6px;")
-
-    def update_recording_time(self, elapsed: float) -> None:
-        """Updates duration counter and visual warning cap."""
-        self.elapsed_seconds = elapsed
-        self.label.setText(f"Recording... {int(elapsed)}s")
-        
-        # Warning: pulse red if approaching the 60s cap (e.g. >= 50s)
-        if elapsed >= 50.0:
-            # Flashes red/black rapidly
-            self.dot.setStyleSheet("background-color: rgb(255, 0, 0); border-radius: 6px;")
-            self.flash_timer.setInterval(200)  # faster warning flash
         else:
-            self.flash_timer.setInterval(500)
+            self.flash_timer.stop()
+            self.dot.setVisible(True)
+            self.dot.setStyleSheet("background-color: #FFCC00; border-radius: 5px;")
+            self.label.setText("Processing...")
+
+    def update_recording_time(self, seconds: float) -> None:
+        if self.state == "RECORDING":
+            self.elapsed_seconds = seconds
+            mins = int(seconds) // 60
+            secs = int(seconds) % 60
+            self.label.setText(f"Recording {mins:02d}:{secs:02d}")
 
     def toggle_indicator_visibility(self) -> None:
-        """Toggles the visibility of the indicator dot to create flashing effect."""
         self.indicator_visible = not self.indicator_visible
         self.dot.setVisible(self.indicator_visible)
 
@@ -126,6 +144,19 @@ class RecordingIndicator(QWidget):
 
     def contextMenuEvent(self, event: Any) -> None:
         menu = QMenu(self)
+
+        start_action = None
+        save_action = None
+        cancel_action = None
+
+        if self.state == "RECORDING":
+            save_action = menu.addAction("Save Recording")
+            cancel_action = menu.addAction("Cancel Recording")
+            menu.addSeparator()
+        else:
+            start_action = menu.addAction("Start Recording")
+            menu.addSeparator()
+
         settings_action = menu.addAction("Open Settings")
         summary_action = menu.addAction("Generate Daily Summary")
         index_action = menu.addAction("Rebuild Student Index")
@@ -158,7 +189,13 @@ class RecordingIndicator(QWidget):
         quit_action = menu.addAction("Quit")
         
         action = menu.exec(event.globalPos())
-        if action == settings_action:
+        if start_action and action == start_action:
+            self.start_recording_requested.emit()
+        elif save_action and action == save_action:
+            self.save_recording_requested.emit()
+        elif cancel_action and action == cancel_action:
+            self.cancel_recording_requested.emit()
+        elif action == settings_action:
             self.open_settings_requested.emit()
         elif action == summary_action:
             self.generate_daily_summary_requested.emit()

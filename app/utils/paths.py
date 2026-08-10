@@ -33,3 +33,10 @@ def get_default_whisper_bin_dir() -> Path:
     bin_dir = project_root / "bin" / "whisper"
     bin_dir.mkdir(parents=True, exist_ok=True)
     return bin_dir
+
+def get_failed_audio_dir() -> Path:
+    """Returns the path for failed audio recordings that require recovery."""
+    failed_dir = get_app_data_dir() / "failed_recordings"
+    failed_dir.mkdir(parents=True, exist_ok=True)
+    return failed_dir
+

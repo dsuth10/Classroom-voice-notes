@@ -2,12 +2,17 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, Tuple
-from PySide6.QtCore import QObject, QTimer, Slot
+from PySide6.QtCore import QObject, QTimer, Slot, Signal
+
 from app.audit.audit_logger import log_audit_event
 from app.ollama_router.classifier import OllamaClassifier
 from app.destinations.obsidian_writer import ObsidianWriter
 
 class ReviewManager(QObject):
+    scan_started = Signal()
+    scan_finished = Signal(int)
+    scan_failed = Signal(str)
+
     def __init__(self, vault_path: str, settings_manager: Any, reminder_engine: Any = None) -> None:
         super().__init__()
         self.vault_path = Path(vault_path)
@@ -15,19 +20,23 @@ class ReviewManager(QObject):
         self.reminder_engine = reminder_engine
         
         self.queue_dir = self.vault_path / "Classroom Voice Notes" / "Review Queue"
+        self._is_scanning = False
+        self._lock = threading.Lock()
+        
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.scan_queue)
+        self.timer.timeout.connect(self.trigger_scan)
         
     def start(self, interval_ms: int = 60000) -> None:
         """Starts periodic scanning of the Review Queue (default: every 60 seconds)."""
         self.timer.start(interval_ms)
         log_audit_event("REVIEW_MANAGER_START", "session", f"Review manager started, scanning every {interval_ms/1000}s")
-        # Run the initial scan in a background thread to avoid blocking the UI on startup
-        threading.Thread(target=self.scan_queue, daemon=True).start()
+        # Run the initial scan asynchronously in a background thread
+        self.trigger_scan()
 
     def stop(self) -> None:
         self.timer.stop()
         log_audit_event("REVIEW_MANAGER_STOP", "session", "Review manager stopped")
+
 
     def _parse_note(self, file_path: Path) -> Tuple[Dict[str, Any], str, bool]:
         """Parses frontmatter, transcript, and checks if checkboxes are complete."""
@@ -38,9 +47,10 @@ class ReviewManager(QObject):
             return {}, "", False
 
         # Parse frontmatter
-        frontmatter = {}
+        frontmatter: Dict[str, Any] = {}
         if content.startswith("---"):
             parts = content.split("---")
+
             if len(parts) >= 3:
                 yaml_str = parts[1]
                 current_key = None
@@ -134,19 +144,59 @@ class ReviewManager(QObject):
             log_audit_event("REVIEW_ROUTE_ERROR", "session", f"Failed to route note {original_file.name}: {e}")
 
     @Slot()
-    def scan_queue(self) -> None:
+    def trigger_scan(self) -> None:
+        """Triggers an asynchronous scan of the Review Queue in a background thread."""
+        with self._lock:
+            if self._is_scanning:
+                log_audit_event("REVIEW_SCAN_SKIPPED", "session", "Review scan skipped: previous scan still in progress")
+                return
+            self._is_scanning = True
+
+        self.scan_started.emit()
+        threading.Thread(target=self._run_scan_worker, daemon=True).start()
+
+    def _run_scan_worker(self) -> None:
+        try:
+            count = self._scan_queue_impl()
+            self.scan_finished.emit(count)
+        except Exception as e:
+            log_audit_event("REVIEW_SCAN_ERROR", "session", f"Review scan worker error: {e}")
+            self.scan_failed.emit(str(e))
+        finally:
+            with self._lock:
+                self._is_scanning = False
+
+    @Slot()
+    def scan_queue(self) -> int:
+        """Scans the Review Queue folder synchronously and returns count of processed notes."""
+
+        with self._lock:
+            if self._is_scanning:
+                log_audit_event("REVIEW_SCAN_SKIPPED", "session", "Review scan skipped: scan already in progress")
+                return 0
+            self._is_scanning = True
+
+        try:
+            return self._scan_queue_impl()
+        finally:
+            with self._lock:
+                self._is_scanning = False
+
+
+    def _scan_queue_impl(self) -> int:
         """Scans the Review Queue folder and processes eligible notes."""
         if not self.queue_dir.exists():
-            return
+            return 0
 
         notes = list(self.queue_dir.glob("*.md"))
         if not notes:
-            return
+            return 0
 
         log_audit_event("REVIEW_SCAN_START", "session", f"Scanning Review Queue: found {len(notes)} files")
 
         ollama_url = self.settings_manager.get("ollama_url")
         careful_model = self.settings_manager.get("careful_model", "phi4:14b")
+        processed_count = 0
 
         for note_file in notes:
             frontmatter, transcript, is_reviewed = self._parse_note(note_file)
@@ -169,6 +219,7 @@ class ReviewManager(QObject):
                 if new_confidence >= 0.75 and new_category != "review_queue":
                     log_audit_event("REVIEW_AUTO_SUCCESS", "session", f"Auto-reclassification successful for {note_file.name} (confidence={new_confidence})")
                     self._route_processed_note(classification, transcript, note_file, frontmatter)
+                    processed_count += 1
                     continue
 
             # Scenario 2: User manually checked all review checkboxes
@@ -179,3 +230,7 @@ class ReviewManager(QObject):
                 
                 # Manual review overrides confidence thresholds, we route whatever the classifier suggests
                 self._route_processed_note(classification, transcript, note_file, frontmatter)
+                processed_count += 1
+
+        return processed_count
+

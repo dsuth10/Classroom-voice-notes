@@ -3,15 +3,23 @@ import httpx
 import time
 from typing import Any, Dict
 from app.audit.audit_logger import log_audit_event
+from app.config.settings import is_loopback_url
 
 class OllamaClassifier:
     def __init__(self, url: str = "http://localhost:11434", model: str = "qwen3.5:latest") -> None:
+        if not is_loopback_url(url):
+            log_audit_event("SECURITY_ERROR", "classifier", f"Attempted to configure non-loopback Ollama URL: {url}")
+            raise ValueError(f"Ollama URL must point to local loopback (localhost, 127.0.0.1, ::1). Got: {url}")
         self.url = url
         self.model = model
 
     def classify(self, transcript: str, recorded_at: str = "", duration_seconds: int = 0) -> Dict[str, Any]:
         """Calls the local Ollama HTTP API to classify the transcript text into structured categories."""
+        if not is_loopback_url(self.url):
+            log_audit_event("SECURITY_ERROR", "classifier", f"Refusing classification with non-loopback Ollama URL: {self.url}")
+            raise ValueError(f"Ollama URL must point to local loopback (localhost, 127.0.0.1, ::1). Got: {self.url}")
         log_audit_event("CLASSIFICATION_START", "session", f"Classifying transcript via Ollama model: {self.model}")
+
         
         prompt = f"""
         You are a local routing classifier for a teacher voice-note application.
