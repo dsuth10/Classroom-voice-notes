@@ -142,8 +142,34 @@ def main() -> None:
     def _update_tray_state(state: str) -> None:
         tray_icon.setIcon(build_tray_icon(state))
         tray_icon.setToolTip(f"Classroom Voice Notes: {state}")
+        
+        titles = {
+            "IDLE": "Classroom Voice Notes",
+            "IDLE_LISTENING": "Classroom Voice Notes: Listening",
+            "RECORDING": "Recording Started",
+            "TRANSCRIBING": "Transcribing Voice Note",
+            "CLASSIFYING": "Classifying Voice Note",
+            "SAVING": "Saving Note to Vault",
+            "ERROR": "Classroom Voice Notes Error"
+        }
+        messages = {
+            "IDLE": "App is idle and ready in system tray.",
+            "IDLE_LISTENING": "Listening for voice recording hotkey...",
+            "RECORDING": "Recording audio...",
+            "TRANSCRIBING": "Converting audio recording to text...",
+            "CLASSIFYING": "Analyzing note content with AI...",
+            "SAVING": "Writing voice note to Obsidian vault...",
+            "ERROR": "An error occurred in Classroom Voice Notes."
+        }
+        title = titles.get(state.upper(), "Classroom Voice Notes")
+        message = messages.get(state.upper(), f"Status: {state}")
+        icon_type = QSystemTrayIcon.MessageIcon.Warning if state.upper() == "ERROR" else QSystemTrayIcon.MessageIcon.Information
+        tray_icon.showMessage(title, message, icon_type, 3000)
 
     controller.state_changed.connect(_update_tray_state)
+    controller.error_occurred.connect(
+        lambda msg: tray_icon.showMessage("Classroom Voice Notes Error", msg, QSystemTrayIcon.MessageIcon.Critical, 5000)
+    )
 
     def _on_tray_activated(reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -165,6 +191,12 @@ def main() -> None:
     quit_act.triggered.connect(app.quit)
 
     tray_icon.show()
+    tray_icon.showMessage(
+        "Classroom Voice Notes Running",
+        "App initialized. Listening in background and system tray icon ready.",
+        QSystemTrayIcon.MessageIcon.Information,
+        4000
+    )
     print("System Tray Icon created OK", flush=True)
 
     # Double-clicking the indicator re-opens the settings window
