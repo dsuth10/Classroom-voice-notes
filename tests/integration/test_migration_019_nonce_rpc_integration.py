@@ -159,3 +159,24 @@ def test_migration_019_anon_key_is_denied_access() -> None:
     assert res.status_code in (401, 403), (
         f"Expected 401/403 for anon caller, got {res.status_code}: {res.text}"
     )
+
+
+@pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for staging tests")
+def test_migration_022_anon_key_is_denied_direct_nonce_table_access() -> None:
+    """Anonymous callers must not be able to read the internal nonce table."""
+    anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
+    if not anon_key:
+        pytest.skip("SUPABASE_ANON_KEY not set; skipping permission boundary test")
+
+    res = requests.get(
+        f"{SUPABASE_URL}/rest/v1/cvn_request_nonces?select=credential_type&limit=1",
+        headers={
+            "apikey": anon_key,
+            "Authorization": f"Bearer {anon_key}",
+        },
+        timeout=30.0,
+    )
+    assert res.status_code in (401, 403), (
+        f"Expected 401/403 for direct anon table access, got "
+        f"{res.status_code}: {res.text}"
+    )
