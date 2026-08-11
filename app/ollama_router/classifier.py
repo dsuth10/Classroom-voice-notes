@@ -1,5 +1,6 @@
 import json
 import httpx
+import re
 import time
 from typing import Any, Dict
 from app.audit.audit_logger import log_audit_event
@@ -28,8 +29,9 @@ class OllamaClassifier:
         Hard rules:
         - Student names, student achievement, behaviour, welfare, absence, pickup, family, medical, emotional, support or assessment information must stay local.
         - If the transcript may contain student-sensitive information, telegram_allowed must be false.
-        - If the transcript asks for research, planning, or general professional work and contains no student-sensitive information, it may be routed to telegram_agent_task.
-        - If the transcript asks to email or contact someone, route to email_draft and require review.
+        - If the transcript asks an agent to perform research, planning, communication, automation, software, file, calendar, email, or other professional work and contains no student-sensitive information, route it to telegram_agent_task with category agent_task.
+        - Distinguish drafting from acting: "draft an email" is email_draft and requires review; "send an email" is an agent_task whose task instructions explicitly say to send it.
+        - For every agent_task, return a self-contained task object with a short title, executable instructions, and priority. Preserve exact requested literals, recipients expressed as safe aliases such as "me", dates, success criteria, and the exact phrase "CONFIRM ACTION" when spoken. Do not copy the whole raw transcript or include student information, contact details, local paths, or audio paths.
         - If uncertain, route to review_queue.
         - Do not invent facts.
         - Do not send normal classroom notes externally.
@@ -51,6 +53,11 @@ class OllamaClassifier:
             "tags": ["<tag1>", "<tag2>"],
             "confidence": <0.0 to 1.0>,
             "agent_target": "hermes" | "openclaw" | "auto" | null,
+            "task": {{
+                "title": "<short action title>",
+                "instructions": "<self-contained instructions for the agent>",
+                "priority": "low" | "normal" | "high"
+            }} or null,
             "category_fields": {{
                 "students_mentioned": ["<first name 1>", "<first name 2>"] or [],
                 "strand": "<Australian Curriculum v9 Strand name or null>",
@@ -127,6 +134,31 @@ class OllamaClassifier:
                     result["telegram_allowed"] = False
                 if "agent_target" not in result:
                     result["agent_target"] = "auto" if result.get("category") == "agent_task" else None
+                if result.get("category") == "agent_task":
+                    task = result.get("task")
+                    if not isinstance(task, dict):
+                        task = {}
+
+                    task_title = str(task.get("title") or result.get("title") or "Agent task").strip()
+                    task_instructions = str(
+                        task.get("instructions") or result.get("summary") or ""
+                    ).strip()
+                    task_instructions = self._repair_explicit_email_action(
+                        transcript,
+                        result.get("category_fields"),
+                        task_instructions,
+                    )
+                    task_priority = str(task.get("priority") or "normal").strip().lower()
+                    if task_priority not in {"low", "normal", "high"}:
+                        task_priority = "normal"
+
+                    result["task"] = {
+                        "title": task_title,
+                        "instructions": task_instructions,
+                        "priority": task_priority,
+                    }
+                else:
+                    result["task"] = None
                 if "category_fields" not in result or not isinstance(result["category_fields"], dict):
                     result["category_fields"] = {}
                     
@@ -163,3 +195,65 @@ class OllamaClassifier:
             "agent_target": None,
             "category_fields": {}
         }
+
+    @staticmethod
+    def _repair_explicit_email_action(
+        transcript: str,
+        category_fields: Any,
+        model_instructions: str,
+    ) -> str:
+        """Preserve explicit owner-email commands when a local model paraphrases them.
+
+        This narrow repair deliberately applies only to send-email requests addressed
+        to the safe owner aliases ``me`` or ``myself``. It keeps authorization separate
+        from message content so a spoken confirmation cannot be swallowed into the body.
+        """
+        normalized = " ".join(str(transcript).split())
+        if not re.search(r"\bsend\b.*\bemail\b", normalized, flags=re.IGNORECASE):
+            return model_instructions
+
+        fields = category_fields if isinstance(category_fields, dict) else {}
+        field_recipient = str(fields.get("recipient") or "").strip().lower()
+        owner_recipient = field_recipient in {"me", "myself"} or bool(
+            re.search(r"\bemail\s+to\s+(?:me|myself)\b", normalized, flags=re.IGNORECASE)
+        )
+        if not owner_recipient:
+            return model_instructions
+
+        has_confirmation = bool(
+            re.search(r"\bconfirm\s+action\b", normalized, flags=re.IGNORECASE)
+        )
+        model_kept_owner = bool(
+            re.search(r"\bemail\s+to\s+(?:me|myself)\b", model_instructions, flags=re.IGNORECASE)
+        )
+        if model_kept_owner and not has_confirmation:
+            return model_instructions
+
+        subject_match = re.search(
+            r"\bwith\s+subjects?\s+(.+?)\s+and\s+(?:the\s+)?body\s+",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        body_match = re.search(
+            r"\band\s+(?:the\s+)?body\s+(.+?)(?=\s+confirm\s+action\b|\s+save\b|$)",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+        subject = (
+            subject_match.group(1).strip(" .,:;\"'")
+            if subject_match
+            else str(fields.get("subject_line") or "").strip()
+        )
+        body = body_match.group(1).strip(" .,:;\"'") if body_match else ""
+
+        # Only reconstruct when both user-authored message fields are available.
+        if not subject or not body:
+            return model_instructions
+
+        repaired = (
+            f"Send an email to me with subject {json.dumps(subject, ensure_ascii=False)} "
+            f"and body {json.dumps(body, ensure_ascii=False)}."
+        )
+        if has_confirmation:
+            repaired += "\n\nCONFIRM ACTION"
+        return repaired

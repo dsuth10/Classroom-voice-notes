@@ -11,6 +11,7 @@ import secrets
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.config.keyring_store import get_secret
+from app.config.environment import get_broker_env, get_env_credential_ref
 from app.destinations.hmac_signer import sign
 
 def main():
@@ -18,9 +19,13 @@ def main():
     parser.add_argument("task_id", help="The Task ID to check (e.g. CVN-YYYYMMDD-HHMMSS-XXXX)")
     args = parser.parse_args()
 
-    # Load client secrets
-    CLIENT_BEARER = get_secret("staging_cvn_bearer_token") or get_secret("cvn_bearer_token")
-    CLIENT_HMAC = get_secret("staging_cvn_hmac_secret") or get_secret("cvn_hmac_secret")
+    if get_broker_env() != "staging":
+        print("[-] CRITICAL: This status helper is restricted to CVN_BROKER_ENV=staging.")
+        sys.exit(1)
+
+    # Load the same environment-scoped credentials used by the desktop app.
+    CLIENT_BEARER = get_secret(get_env_credential_ref("bearer_token"))
+    CLIENT_HMAC = get_secret(get_env_credential_ref("hmac_secret"))
 
     if not CLIENT_BEARER or not CLIENT_HMAC:
         print("[-] CRITICAL: Client credentials not found in Windows Credential Manager under 'ClassroomVoiceNotes'.")
