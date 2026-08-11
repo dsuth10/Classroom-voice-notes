@@ -281,6 +281,64 @@ def test_assess_outbound_structured_result(temp_vault: Path, default_payload: di
     assert assessment.safe_auto_allowed is True
     assert len(assessment.findings) == 0
 
+
+def test_external_action_requires_confirmation_phrase(
+    temp_vault: Path, default_payload: dict, default_config: dict
+) -> None:
+    payload = dict(default_payload)
+    payload["task"] = {
+        "title": "Send owner test email",
+        "instructions": "Send a brief test email to the configured owner.",
+        "priority": "normal",
+    }
+
+    assessment = PolicyGate().assess_outbound(
+        category="agent_task",
+        sensitivity="non_sensitive",
+        safe_task=payload["task"],
+        transcript="Please send a brief test message to me.",
+        payload=payload,
+        source_device_id="device-001",
+        target_agent="openclaw",
+        endpoint_url="https://ref.supabase.co/functions/v1/cvn-submit-task",
+        vault_path=str(temp_vault),
+        config=default_config,
+    )
+
+    assert assessment.safe_auto_allowed is False
+    assert "external_action_confirmation_missing" in assessment.findings
+
+
+def test_external_action_confirmation_phrase_allows_exact_action(
+    temp_vault: Path, default_payload: dict, default_config: dict
+) -> None:
+    payload = dict(default_payload)
+    payload["task"] = {
+        "title": "Send owner test email",
+        "instructions": (
+            "Send a brief test email to the configured owner. CONFIRM ACTION."
+        ),
+        "priority": "normal",
+    }
+
+    assessment = PolicyGate().assess_outbound(
+        category="agent_task",
+        sensitivity="non_sensitive",
+        safe_task=payload["task"],
+        transcript=(
+            "OpenClaw, send a brief test email to me and confirm action now."
+        ),
+        payload=payload,
+        source_device_id="device-001",
+        target_agent="openclaw",
+        endpoint_url="https://ref.supabase.co/functions/v1/cvn-submit-task",
+        vault_path=str(temp_vault),
+        config=default_config,
+    )
+
+    assert assessment.safe_auto_allowed is True
+    assert "external_action_confirmed" in assessment.checks_passed
+
 def test_assess_outbound_high_risk_findings(temp_vault: Path, default_payload: dict, default_config: dict) -> None:
     gate = PolicyGate()
     assessment = gate.assess_outbound(

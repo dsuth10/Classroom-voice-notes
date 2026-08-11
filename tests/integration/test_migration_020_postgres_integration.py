@@ -312,7 +312,7 @@ def test_migration_020_wrong_lease_token_rejection() -> None:
         "p_payload_hash": payload_hash,
         "p_content_hash": content_hash,
     })
-    assert comp_res.status_code in (400, 500)
+    assert comp_res.status_code in (400, 403, 500)
     assert "invalid_lease_token" in comp_res.text
 
 

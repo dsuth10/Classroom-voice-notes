@@ -160,9 +160,72 @@ Acceptable listeners:
 
 Any public, wildcard or non-loopback listener is a blocking failure.
 
-The dedicated `cvn-broker` OpenClaw agent must remain text-only and restricted.
-Do not grant browser, email, gateway-administration, unrestricted shell or
-unrestricted filesystem tools as part of this runbook.
+The dedicated `cvn-broker` agent may use reviewed action tools, but it must not
+receive Supabase credentials, gateway-administration access, or unrestricted
+host execution. The worker owns database polling and task lifecycle; OpenClaw
+owns execution of the single instruction delivered by the worker.
+
+### 5a. Provision an action-capable agent workspace
+
+Run these steps as the OpenClaw Gateway service account, not as `root` and not
+as the CVN database worker unless those are intentionally the same account.
+
+1. Locate the configured workspace for agent `cvn-broker`.
+2. Copy `deploy/openclaw/cvn-broker/AGENTS.md` into that workspace as
+   `AGENTS.md`.
+3. Copy `deploy/openclaw/cvn-broker/USER.md.template` to `USER.md`, replace the
+   owner-email placeholder, and restrict the file to the Gateway account.
+4. Install and authenticate only the action integrations that have been
+   reviewed. For Gmail/Google Workspace, use OpenClaw's bundled `gog` skill;
+   for other IMAP/SMTP accounts use the bundled `himalaya` skill. Keep OAuth or
+   mail credentials in the provider's approved credential store, never in the
+   workspace files.
+5. Keep host execution in the cautious approval policy. Do not use OpenClaw's
+   no-approval/YOLO execution policy for CVN audio tasks.
+
+Verify after configuration:
+
+```bash
+openclaw skills list --eligible
+openclaw exec-policy preset cautious
+openclaw approvals get
+openclaw config validate
+openclaw security audit --deep
+openclaw gateway restart
+openclaw gateway status --require-rpc
+```
+
+The agent workspace requires `CONFIRM ACTION` in a CVN task before performing
+an external side effect such as sending mail. This confirmation applies only
+to the exact action stated in that task.
+
+### 5b. Desktop settings for the current staging worker
+
+The checked-in systemd service runs `scripts/watch_inbox_worker.py`, which
+consumes `cvn.agent_task.v1` through `cvn-submit-task`. For an audio action
+pilot, configure the desktop application as follows:
+
+```text
+Sharing Mode: Safe Auto
+Default Target Agent: openclaw
+Endpoint URL: https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-submit-task
+Include full transcript: off
+```
+
+`Review All` and `Trusted Auto` create `cvn.outbound_item.v2` items. Do not use
+those modes with this service until a reviewed `OutboundWorkerV2` service is
+deployed and accepted separately.
+
+Use this synthetic, non-sensitive first audio instruction:
+
+```text
+OpenClaw, send an email to me with subject CVN audio action test and body
+AUDIO_ACTION_OK. Confirm action.
+```
+
+Acceptance requires the desktop audit/outbox, `cvn_tasks`, `cvn_task_events`,
+worker journal, OpenClaw tool receipt, and received email to agree on one task
+and one send. Never use classroom or student information in this test.
 
 ## 6. Install and validate the service
 

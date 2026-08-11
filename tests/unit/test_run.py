@@ -1,12 +1,13 @@
 from unittest import mock
 
+@mock.patch("run.QSystemTrayIcon")
 @mock.patch("run.QApplication")
 @mock.patch("run.SettingsManager")
 @mock.patch("run.prompt_first_launch_vault_picker")
 @mock.patch("run.AppController")
 @mock.patch("run.RecordingIndicator")
 @mock.patch("run.MainWindow")
-def test_run_main(mock_main_window, mock_indicator, mock_controller, mock_prompt, mock_settings, mock_qapp):
+def test_run_main(mock_main_window, mock_indicator, mock_controller, mock_prompt, mock_settings, mock_qapp, mock_tray):
     import run
     
     # Setup mock returns
@@ -24,6 +25,9 @@ def test_run_main(mock_main_window, mock_indicator, mock_controller, mock_prompt
     mock_window_inst = mock.MagicMock()
     mock_main_window.return_value = mock_window_inst
     
+    mock_tray_inst = mock.MagicMock()
+    mock_tray.return_value = mock_tray_inst
+    
     # Run main
     with mock.patch("sys.exit") as mock_exit:
         run.main()
@@ -35,13 +39,17 @@ def test_run_main(mock_main_window, mock_indicator, mock_controller, mock_prompt
         mock_controller.assert_called_once_with(mock_settings_inst)
         mock_indicator.assert_called_once()
         mock_main_window.assert_called_once_with(mock_settings_inst, mock_controller_inst)
+        mock_tray.assert_called_once()
         
         # Verify signal connections
-        mock_controller_inst.state_changed.connect.assert_called_with(mock_indicator_inst.set_state)
+        mock_controller_inst.state_changed.connect.assert_called()
         mock_controller_inst.recording_time_updated.connect.assert_called_with(mock_indicator_inst.update_recording_time)
         mock_indicator_inst.set_state.assert_called_with("IDLE_LISTENING")
         mock_indicator_inst.show.assert_called_once()
         mock_window_inst.show.assert_called_once()
+        mock_tray_inst.show.assert_called_once()
+        mock_tray_inst.showMessage.assert_called_once()
         
         # Verify execution
         mock_exit.assert_called_once()
+

@@ -968,7 +968,9 @@ All previous steps are merged and:
 
 ### Gate B — Synthetic staging
 
-Use a separate staging Supabase project and invented data. Execute and record these scenarios:
+Use a separate staging Supabase project and invented data. Execute and record these scenarios.
+Use `docs/gate-b-staging-evidence.md` as the evidence register; local runner output
+is pre-flight coverage only and cannot mark this gate complete.
 
 1. `off` creates no review, outbox, or remote item.
 2. Review-all record-only completes to SQLite and CSV and reconciles locally.
@@ -995,7 +997,8 @@ Record date, tester, build/commit, environment, expected result, actual result, 
 
 ### Gate C — Privacy and operational approval
 
-Before real classroom information:
+Before real classroom information, complete
+`docs/gate-c-governance-checklist.md` with accountable owners and evidence:
 
 - [ ] Privacy/data-impact assessment is approved for the intended school/jurisdiction.
 - [ ] Legal basis, notice/consent model, and processor agreements are confirmed.

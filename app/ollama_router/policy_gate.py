@@ -213,8 +213,39 @@ class PolicyGate:
             high_risk_flags.append("contact_detail_found")
         else:
             checks_passed.append("no_parent_contact")
-            
-        # 10. Payload size check
+
+        # 10. Explicit confirmation for external side effects. The phrase is
+        # deliberately narrow so ordinary classroom speech cannot authorize an
+        # email, publication, deletion, purchase, or security change.
+        external_action_pattern = re.compile(
+            r"\b(send|email|message|publish|post|delete|remove|purchase|buy|"
+            r"change\s+(?:a\s+)?password|change\s+security)\b",
+            re.IGNORECASE,
+        )
+        confirmation_pattern = re.compile(r"\bconfirm\s+action\b", re.IGNORECASE)
+        action_requested = bool(
+            external_action_pattern.search(title)
+            or external_action_pattern.search(instructions)
+        )
+        action_confirmed = bool(
+            confirmation_pattern.search(transcript)
+            or confirmation_pattern.search(instructions)
+        )
+
+        if action_requested and not action_confirmed:
+            log_audit_event(
+                "POLICY_BLOCKED",
+                "policy_gate",
+                "External side effect requested without the explicit confirmation phrase.",
+            )
+            findings.append("external_action_confirmation_missing")
+            high_risk_flags.append("external_action_confirmation_missing")
+        else:
+            checks_passed.append(
+                "external_action_confirmed" if action_requested else "no_external_side_effect"
+            )
+
+        # 11. Payload size check
         max_bytes = config.get("max_payload_bytes") or 65536
         import json
         payload_bytes = json.dumps(payload).encode("utf-8") if isinstance(payload, dict) else b""
@@ -224,14 +255,14 @@ class PolicyGate:
         else:
             checks_passed.append("payload_size_ok")
             
-        # 11. Source device ID check
+        # 12. Source device ID check
         if not source_device_id or not source_device_id.strip():
             log_audit_event("POLICY_BLOCKED", "policy_gate", "Missing source_device_id.")
             findings.append("missing_source_device_id")
         else:
             checks_passed.append("source_device_id_present")
             
-        # 12. Target agent allowlist check
+        # 13. Target agent allowlist check
         allowed_agents = config.get("allowed_target_agents") or ["hermes", "openclaw", "auto"]
         if target_agent not in allowed_agents:
             log_audit_event("POLICY_BLOCKED", "policy_gate", f"Unapproved target agent '{target_agent}'.")
@@ -239,7 +270,7 @@ class PolicyGate:
         else:
             checks_passed.append("target_agent_allowlisted")
             
-        # 13. Endpoint domain allowlist check
+        # 14. Endpoint domain allowlist check
         allowed_domains = config.get("allowed_endpoint_domains") or ["supabase.co"]
         domain_matched = False
         try:
@@ -258,7 +289,7 @@ class PolicyGate:
             findings.append("endpoint_domain_unapproved")
         else:
             checks_passed.append("endpoint_domain_allowlisted")
-            
+
         # Determine overall risk level
         if high_risk_flags:
             risk_level = "high"
@@ -267,7 +298,7 @@ class PolicyGate:
         else:
             risk_level = "low"
             
-        safe_auto = (not findings and len(checks_passed) == 14)
+        safe_auto = (not findings and len(checks_passed) == 15)
         
         if safe_auto:
             log_audit_event("POLICY_APPROVED", "policy_gate", "External dispatch payload passed all Policy Gate requirements.")

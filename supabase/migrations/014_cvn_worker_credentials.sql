@@ -87,6 +87,10 @@ END;
 $$;
 
 -- 4. Update Atomic Claim RPC with lease token generation
+DROP FUNCTION IF EXISTS public.cvn_claim_outbound_item(text, int, text[], text[]);
+DROP FUNCTION IF EXISTS public.cvn_complete_outbound_item(text, text, jsonb);
+DROP FUNCTION IF EXISTS public.cvn_fail_outbound_item(text, text, text, boolean, int);
+
 CREATE OR REPLACE FUNCTION public.cvn_claim_outbound_item(
     p_worker_id TEXT,
     p_visibility_timeout_seconds INT DEFAULT 300,

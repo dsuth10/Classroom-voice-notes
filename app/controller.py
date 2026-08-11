@@ -69,12 +69,25 @@ class AppController(QObject):
         # Initialize and start the outbox retry timer (every 60 seconds)
         self.outbox_retry_timer = QTimer(self)
         self.outbox_retry_timer.timeout.connect(lambda: self._retry_pending_outbox(manual=False))
-        if self.settings_manager.external_sharing_enabled():
-            self.outbox_retry_timer.start(60000)
-            # Trigger one outbox check shortly after startup in background
-            QTimer.singleShot(2000, lambda: self._retry_pending_outbox(manual=False))
+        # Trigger startup outbound recovery and retention purge (3 seconds after launch)
+        QTimer.singleShot(3000, self._run_startup_outbound_recovery)
+
+    def _run_startup_outbound_recovery(self) -> None:
+        try:
+            from app.destinations.outbound_submission_service import OutboundSubmissionService
+            retention_days = int(self.settings_manager.get("external_agent.review_retention_days") or 30)
+            submission_service = OutboundSubmissionService(self.settings_manager)
+            
+            import threading
+            threading.Thread(
+                target=lambda: submission_service.run_startup_recovery(retention_days=retention_days),
+                daemon=True
+            ).start()
+        except Exception as e:
+            log_audit_event("OUTBOUND_STARTUP_RECOVERY_ERROR", "controller", f"Failed startup recovery: {e}")
 
     def set_state(self, new_state: str) -> None:
+
         old_state = self.state
         self.state = new_state.upper()
         log_audit_event("STATE_TRANSITION", "controller", f"Transitioned from {old_state} to {self.state}")
@@ -85,8 +98,7 @@ class AppController(QObject):
             return
 
         enabled = self.settings_manager.get("wake_word.enabled")
-        if not enabled:
-            return
+        engine_type = self.settings_manager.get("wake_word.engine") or "openwakeword"
 
         model_path = self.settings_manager.get("wake_word.model_path") or "manual_only"
         phrase = self.settings_manager.get("wake_word.phrase") or "Joshua note"
@@ -95,14 +107,15 @@ class AppController(QObject):
         # Build engine on the main thread — ONNX Runtime crashes if created inside a QThread on Windows
         from app.wakeword.engine import OpenWakeWordEngine, ManualOnlyEngine, WakeEngine
         try:
-            if model_path == "manual_only" or not model_path:
+            if not enabled or engine_type in ("manual_only", "none") or model_path == "manual_only" or not model_path:
                 engine: WakeEngine = ManualOnlyEngine()
             else:
                 engine = OpenWakeWordEngine(model_path, threshold=threshold)
         except Exception as e:
-            log_audit_event("WAKEWORD_ENGINE_ERROR", "controller", f"Failed to build wake engine: {e}")
+            log_audit_event("WAKEWORD_ENGINE_ERROR", "controller", f"Failed to build wake engine: {e}. Falling back to manual-only mode.")
             self.error_occurred.emit(f"Wake word engine error: {e}")
-            return
+            engine = ManualOnlyEngine()
+
 
         from app.wakeword.worker import WakeWordWorker
         self.wakeword_worker = WakeWordWorker(
@@ -188,6 +201,8 @@ class AppController(QObject):
         
         self.audio_input_manager.unsubscribe(self.recorder_worker.queue)
         self.recorder_worker.stop_recording()
+
+    stop_recording = stop_and_save
 
     def cancel_recording(self) -> None:
         if self.state != "RECORDING" or not self.recorder_worker:

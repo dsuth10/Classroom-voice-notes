@@ -1,0 +1,222 @@
+{
+  "metadata": {
+    "timestamp": "2026-08-06T10:47:30Z",
+    "commit_sha": "fd18150e7f6cf29b04f3b3a2028f30d2c6b15856",
+    "environment": "local",
+    "run_live_openclaw": false
+  },
+  "automated_scenarios": [
+    {
+      "scenario_id": 1,
+      "category": "automated",
+      "name": "sharing_off_no_outbox",
+      "status": "PASSED",
+      "duration_ms": 852,
+      "target": "tests/unit/test_outbound_submission_service_pr10.py",
+      "summary": ".                                                                        [100%]"
+    },
+    {
+      "scenario_id": 2,
+      "category": "automated",
+      "name": "review_all_record_only_sqlite_csv",
+      "status": "PASSED",
+      "duration_ms": 1034,
+      "target": "tests/unit/test_record_consumer_pr8.py",
+      "summary": "...                                                                      [100%]"
+    },
+    {
+      "scenario_id": 3,
+      "category": "automated",
+      "name": "review_all_openclaw_adapter",
+      "status": "PASSED",
+      "duration_ms": 1315,
+      "target": "tests/unit/test_openclaw_adapter.py",
+      "summary": "....................                                                     [100%]"
+    },
+    {
+      "scenario_id": 4,
+      "category": "automated",
+      "name": "full_preview_stored_remote_hash_match",
+      "status": "PASSED",
+      "duration_ms": 911,
+      "target": "tests/unit/test_outbound_review_store.py",
+      "summary": ".......                                                                  [100%]"
+    },
+    {
+      "scenario_id": 5,
+      "category": "automated",
+      "name": "rejection_no_outbound_item",
+      "status": "PASSED",
+      "duration_ms": 946,
+      "target": "tests/unit/test_outbound_review_store.py",
+      "summary": ".......                                                                  [100%]"
+    },
+    {
+      "scenario_id": 6,
+      "category": "automated",
+      "name": "edited_content_reassessed",
+      "status": "PASSED",
+      "duration_ms": 914,
+      "target": "tests/unit/test_outbound_review_store.py",
+      "summary": ".......                                                                  [100%]"
+    },
+    {
+      "scenario_id": 7,
+      "category": "automated",
+      "name": "unauthorized_trusted_mode_rejected",
+      "status": "PASSED",
+      "duration_ms": 826,
+      "target": "tests/unit/test_outbound_submission_service_pr10.py",
+      "summary": ".                                                                        [100%]"
+    },
+    {
+      "scenario_id": 8,
+      "category": "automated",
+      "name": "authorized_low_risk_trusted_completes",
+      "status": "PASSED",
+      "duration_ms": 805,
+      "target": "tests/unit/test_outbound_submission_service_pr10.py",
+      "summary": ".                                                                        [100%]"
+    },
+    {
+      "scenario_id": 9,
+      "category": "automated",
+      "name": "high_risk_wrong_policy_trusted_pauses",
+      "status": "PASSED",
+      "duration_ms": 805,
+      "target": "tests/unit/test_outbound_submission_service_pr10.py",
+      "summary": ".                                                                        [100%]"
+    },
+    {
+      "scenario_id": 10,
+      "category": "automated",
+      "name": "network_loss_before_submit_retries",
+      "status": "PASSED",
+      "duration_ms": 785,
+      "target": "tests/unit/test_outbound_submission_service_pr10.py",
+      "summary": ".                                                                        [100%]"
+    },
+    {
+      "scenario_id": 11,
+      "category": "automated",
+      "name": "lost_submission_response_idempotent",
+      "status": "PASSED",
+      "duration_ms": 788,
+      "target": "tests/unit/test_outbound_submission_service_pr10.py",
+      "summary": ".                                                                        [100%]"
+    },
+    {
+      "scenario_id": 12,
+      "category": "automated",
+      "name": "worker_crash_after_claim_reclaims",
+      "status": "PASSED",
+      "duration_ms": 983,
+      "target": "tests/unit/test_outbound_worker_v2_pr8.py",
+      "summary": "...                                                                      [100%]"
+    },
+    {
+      "scenario_id": 13,
+      "category": "automated",
+      "name": "lost_completion_no_duplicate_side_effect",
+      "status": "PASSED",
+      "duration_ms": 1005,
+      "target": "tests/unit/test_outbound_worker_v2_pr8.py",
+      "summary": "...                                                                      [100%]"
+    },
+    {
+      "scenario_id": 14,
+      "category": "automated",
+      "name": "wrong_worker_capability_expired_lease_rejected",
+      "status": "PASSED",
+      "duration_ms": 1113,
+      "target": "tests/unit/test_outbound_worker_v2_step9.py",
+      "summary": ".........                                                                [100%]"
+    },
+    {
+      "scenario_id": 15,
+      "category": "automated",
+      "name": "tampered_content_hash_signature_nonce_rejected",
+      "status": "PASSED",
+      "duration_ms": 1128,
+      "target": "tests/unit/test_outbound_worker_v2_step9.py",
+      "summary": ".........                                                                [100%]"
+    },
+    {
+      "scenario_id": 16,
+      "category": "automated",
+      "name": "oversized_deeply_nested_content_rejected",
+      "status": "PASSED",
+      "duration_ms": 1035,
+      "target": "tests/unit/test_outbound_worker_v2_step9.py",
+      "summary": ".........                                                                [100%]"
+    }
+  ],
+  "operational_rehearsals": [
+    {
+      "scenario_id": 17,
+      "category": "operational_rehearsal",
+      "name": "dead_letter_visibility_and_monitoring",
+      "status": "REHEARSAL_PENDING",
+      "requirement": "Dead-letter queue age, retry counts, and status transitions visible in operator view.",
+      "evidence_ref": "docs/operations/outbox-recovery.md"
+    },
+    {
+      "scenario_id": 18,
+      "category": "operational_rehearsal",
+      "name": "retention_purge_and_backup_restore",
+      "status": "REHEARSAL_PENDING",
+      "requirement": "Purge scheduled job deletes eligible terminal records without touching active claims.",
+      "evidence_ref": "supabase/migrations/009_cvn_outbound_reaper.sql"
+    },
+    {
+      "scenario_id": 19,
+      "category": "operational_rehearsal",
+      "name": "emergency_disable_and_credential_rotation",
+      "status": "REHEARSAL_PENDING",
+      "requirement": "Emergency disable stops new submissions & worker claims; credential rotation succeeds without downtime.",
+      "evidence_ref": "docs/operations/environment-and-credentials.md"
+    }
+  ],
+  "governance_sign_off": [
+    {
+      "item_id": "GOV-01",
+      "category": "human_sign_off",
+      "title": "Privacy & Data Impact Assessment",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "Privacy / Legal Lead",
+      "notes": "Approved for target school jurisdiction; synthetic data verified."
+    },
+    {
+      "item_id": "GOV-02",
+      "category": "human_sign_off",
+      "title": "Legal Basis & Consent Model",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "Legal Lead",
+      "notes": "Processor agreements and notice/consent terms confirmed."
+    },
+    {
+      "item_id": "GOV-03",
+      "category": "human_sign_off",
+      "title": "Transcript Inclusion & Retention Policy",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "Data Protection Officer",
+      "notes": "Transcript export and retention windows explicitly approved."
+    },
+    {
+      "item_id": "GOV-04",
+      "category": "human_sign_off",
+      "title": "Production Secret Management & Worker Hosting",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "DevOps / Infrastructure Lead",
+      "notes": "Worker hosting platform and secret rotation owners assigned."
+    },
+    {
+      "item_id": "GOV-05",
+      "category": "human_sign_off",
+      "title": "Support & Incident Response On-Call",
+      "status": "PENDING_SIGN_OFF",
+      "owner": "Operations Lead",
+      "notes": "Named on-call owner and incident runbooks established."
+    }
+  ]
+}

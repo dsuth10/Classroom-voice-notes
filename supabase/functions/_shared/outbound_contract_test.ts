@@ -51,7 +51,7 @@ Deno.test("Worker Auth — Valid 5-Element HMAC Request", async () => {
   };
   Deno.env.set("AGENT_BROKER_WORKER_CREDENTIALS", JSON.stringify(registry));
 
-  const path = "/functions/v1/cvn-claim-outbound-item";
+  const path = "/cvn-claim-outbound-item";
   const now = Math.floor(Date.now() / 1000).toString();
   const nonce = "nonce-" + Math.random().toString(36).substring(2);
   const body = JSON.stringify({ worker_id: "worker-1" });
@@ -115,7 +115,7 @@ Deno.test("Worker Auth — Rejects Stale and Future Timestamps", async () => {
   };
   Deno.env.set("AGENT_BROKER_WORKER_CREDENTIALS", JSON.stringify(registry));
 
-  const path = "/functions/v1/cvn-claim-outbound-item";
+  const path = "/cvn-claim-outbound-item";
   const staleTime = (Math.floor(Date.now() / 1000) - 600).toString();
   const nonce = "nonce-stale-123";
   const body = "{}";
@@ -161,7 +161,7 @@ Deno.test("Worker Auth — Rejects Replayed Nonces via DB RPC", async () => {
   };
   Deno.env.set("AGENT_BROKER_WORKER_CREDENTIALS", JSON.stringify(registry));
 
-  const path = "/functions/v1/cvn-claim-outbound-item";
+  const path = "/cvn-claim-outbound-item";
   const now = Math.floor(Date.now() / 1000).toString();
   const nonce = "nonce-replay-unique-999";
   const body = JSON.stringify({ worker_id: "worker-1" });
@@ -217,7 +217,7 @@ Deno.test(
     };
     Deno.env.set("AGENT_BROKER_WORKER_CREDENTIALS", JSON.stringify(registry));
 
-    const path = "/functions/v1/cvn-claim-outbound-item";
+    const path = "/cvn-claim-outbound-item";
     const now = Math.floor(Date.now() / 1000).toString();
     const nonce = "nonce-" + Math.random().toString(36).substring(2);
     const body = JSON.stringify({ worker_id: "invalid-worker" });
@@ -254,7 +254,7 @@ Deno.test(
     Deno.env.set("CVN_HMAC_SECRET", "client-hmac-456");
     Deno.env.set("CVN_CLIENT_KEY_ID", "desktop-client-1");
 
-    const path = "/functions/v1/cvn-submit-outbound-item";
+    const path = "/cvn-submit-outbound-item";
     const now = Math.floor(Date.now() / 1000).toString();
     const nonce = "nonce-client-9999";
     const body = JSON.stringify({ item_id: "CVNI-TEST-1" });
@@ -297,7 +297,7 @@ Deno.test(
     Deno.env.set("CVN_BEARER_TOKEN", "client-bearer-123");
     Deno.env.set("CVN_HMAC_SECRET", "client-hmac-456");
 
-    const path = "/functions/v1/cvn-submit-task";
+    const path = "/cvn-submit-task";
     const body = JSON.stringify({ task_id: "CVN-20260802-120000-A1B2" });
 
     const mockDb = createMockSupabaseClient();

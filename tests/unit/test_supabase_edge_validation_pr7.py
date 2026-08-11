@@ -33,6 +33,8 @@ def test_edge_function_canonicalization_and_limits() -> None:
     assert "MAX_BODY_SIZE_BYTES = 512 * 1024" in content
     assert "body_too_large" in content
     assert "status: 413" in content
+    assert "MAX_JSON_DEPTH = 32" in content
+    assert "nested_content_too_deep" in content
 
 
 def test_edge_function_security_and_rpc_structure() -> None:
@@ -48,4 +50,3 @@ def test_edge_function_security_and_rpc_structure() -> None:
     assert 'supabase.rpc("cvn_submit_outbound_item"' in content
     assert "duplicate_idempotency_key" in content
     assert "status: 409" in content
-

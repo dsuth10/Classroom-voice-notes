@@ -20,6 +20,7 @@ const corsHeaders = {
 const SCHEMA_VERSION = "cvn.outbound_item.v2";
 const STALE_TIMESTAMP_SECONDS = 300; // 5 min
 const MAX_BODY_SIZE_BYTES = 512 * 1024; // 512 KB
+const MAX_JSON_DEPTH = 32;
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -120,6 +121,19 @@ function validateSchema(p: any): { valid: boolean; errors: string[] } {
   return { valid: errors.length === 0, errors };
 }
 
+function exceedsMaxJsonDepth(value: unknown, depth = 0): boolean {
+  if (depth > MAX_JSON_DEPTH) return true;
+  if (Array.isArray(value)) {
+    return value.some((entry) => exceedsMaxJsonDepth(entry, depth + 1));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.values(value).some((entry) =>
+      exceedsMaxJsonDepth(entry, depth + 1)
+    );
+  }
+  return false;
+}
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -171,6 +185,13 @@ serve(async (req: Request) => {
     payload = JSON.parse(bodyText);
   } catch (_e) {
     return new Response(JSON.stringify({ error: "invalid_json" }), {
+      status: 400,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  if (exceedsMaxJsonDepth(payload)) {
+    return new Response(JSON.stringify({ error: "nested_content_too_deep" }), {
       status: 400,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

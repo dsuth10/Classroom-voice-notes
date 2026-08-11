@@ -180,9 +180,7 @@ class OutboundWorkerV2:
     def _send_edge_rpc(self, path_suffix: str, payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
         """Sends signed RPC request to Edge function."""
         url = f"{self.edge_base_url}/{path_suffix.lstrip('/')}"
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        path = parsed.path or f"/functions/v1/{path_suffix.lstrip('/')}"
+        path = f"/{path_suffix.lstrip('/')}"
 
         body_str = json.dumps(payload)
         data = body_str.encode("utf-8")
