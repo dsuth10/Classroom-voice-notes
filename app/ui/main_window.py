@@ -118,7 +118,49 @@ class MainWindow(QMainWindow):
         self.level_bar.setFixedHeight(12)
         level_layout.addWidget(self.level_bar)
         
+        # Audio earcons / sound cues
+        earcon_layout = QHBoxLayout()
+        audio_layout.addLayout(earcon_layout)
+        self.earcons_enabled_chk = QCheckBox("Enable audio earcons / sound cues")
+        self.earcons_enabled_chk.setChecked(bool(self.settings_manager.get("audio.earcons_enabled", True)))
+        earcon_layout.addWidget(self.earcons_enabled_chk)
+
+        earcon_vol_layout = QHBoxLayout()
+        audio_layout.addLayout(earcon_vol_layout)
+        earcon_vol_layout.addWidget(QLabel("Sound Cue Volume:"))
+        self.earcons_volume_spin = QDoubleSpinBox()
+        self.earcons_volume_spin.setRange(0.0, 1.0)
+        self.earcons_volume_spin.setSingleStep(0.05)
+        self.earcons_volume_spin.setValue(float(self.settings_manager.get("audio.earcons_volume") or 0.7))
+        earcon_vol_layout.addWidget(self.earcons_volume_spin)
+        self.test_cue_btn = QPushButton("Test Cue")
+        self.test_cue_btn.clicked.connect(self.test_sound_cue)
+        earcon_vol_layout.addWidget(self.test_cue_btn)
+        
         main_layout.addWidget(audio_group)
+
+        # ----------------------------------------------------
+        # Group 1.8: System Tray & Global Hotkeys
+        # ----------------------------------------------------
+        sys_tray_group = QGroupBox("System Tray & Global Hotkey Configuration")
+        sys_tray_layout = QVBoxLayout(sys_tray_group)
+        sys_tray_layout.setSpacing(8)
+
+        self.minimize_tray_chk = QCheckBox("Minimise to system tray on window close")
+        self.minimize_tray_chk.setChecked(bool(self.settings_manager.get("system.minimize_to_tray", True)))
+        sys_tray_layout.addWidget(self.minimize_tray_chk)
+
+        self.hotkey_enabled_chk = QCheckBox("Enable global recording toggle hotkey")
+        self.hotkey_enabled_chk.setChecked(bool(self.settings_manager.get("system.hotkey_enabled", True)))
+        sys_tray_layout.addWidget(self.hotkey_enabled_chk)
+
+        hotkey_layout = QHBoxLayout()
+        sys_tray_layout.addLayout(hotkey_layout)
+        hotkey_layout.addWidget(QLabel("Global Hotkey Sequence:"))
+        self.hotkey_edit = QLineEdit(self.settings_manager.get("system.hotkey_sequence") or "Win+Shift+V")
+        hotkey_layout.addWidget(self.hotkey_edit)
+
+        main_layout.addWidget(sys_tray_group)
 
         # Query sound devices and populate dropdown
         import sounddevice as sd
@@ -516,11 +558,18 @@ class MainWindow(QMainWindow):
         self.settings_manager.set("spoken_commands.model_path", cmd_model)
         self.settings_manager.set("spoken_commands.grammar_keywords", cmd_keywords)
 
-        # Save Audio Device Index
+        # Save Audio Earcons & Hardware settings
+        self.settings_manager.set("audio.earcons_enabled", self.earcons_enabled_chk.isChecked())
+        self.settings_manager.set("audio.earcons_volume", self.earcons_volume_spin.value())
         selected_idx = self.device_combo.currentIndex()
         if selected_idx >= 0 and selected_idx < len(self.device_mapping):
             dev_idx = self.device_mapping[selected_idx]
             self.settings_manager.set("audio.device_index", dev_idx)
+
+        # Save System Tray & Global Hotkey settings
+        self.settings_manager.set("system.minimize_to_tray", self.minimize_tray_chk.isChecked())
+        self.settings_manager.set("system.hotkey_enabled", self.hotkey_enabled_chk.isChecked())
+        self.settings_manager.set("system.hotkey_sequence", self.hotkey_edit.text().strip() or "Win+Shift+V")
 
         # Save Agent settings
         self.settings_manager.set("agents.enabled", self.agent_enabled_chk.isChecked())
@@ -550,7 +599,32 @@ class MainWindow(QMainWindow):
                 return
 
         QMessageBox.information(self, "Success", "Settings saved successfully.")
-        self.close()
+        self.hide()
+
+    def closeEvent(self, event: Any) -> None:
+        """Minimises window to system tray if configured, otherwise accepts close."""
+        minimize_to_tray = self.settings_manager.get("system.minimize_to_tray")
+        if minimize_to_tray is not False:
+            event.ignore()
+            self.hide()
+        else:
+            event.accept()
+
+    def test_sound_cue(self) -> None:
+        """Plays a test sound cue with the currently selected volume."""
+        try:
+            from app.audio.cue_manager import synthesize_tone
+            vol = self.earcons_volume_spin.value()
+            wav_bytes = synthesize_tone([523.25, 659.25, 783.99], [80, 80, 110], volume=vol)
+            import winsound
+            winsound.PlaySound(
+                wav_bytes,
+                winsound.SND_MEMORY | winsound.SND_ASYNC | winsound.SND_NODEFAULT,
+            )
+        except ImportError:
+            pass
+        except Exception as e:
+            QMessageBox.warning(self, "Audio Error", f"Could not play audio cue: {e}")
 
     def _set_sharing_mode_combo(self, mode: str) -> None:
         idx = self.sharing_mode_combo.findData(mode)

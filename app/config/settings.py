@@ -2,6 +2,7 @@ import json
 import os
 from typing import Any, Dict
 from pathlib import Path
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 from app.utils.paths import get_config_path, get_default_whisper_bin_dir
 
@@ -78,10 +79,17 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
         "chunk_size": 1280,
         "pre_roll_seconds": 1.5,
         "device_index": None,
+        "earcons_enabled": True,
+        "earcons_volume": 0.7,
     },
     "recording": {
         "hard_cap_seconds": 60,
         "manual_controls_enabled": True,
+    },
+    "system": {
+        "minimize_to_tray": True,
+        "hotkey_enabled": True,
+        "hotkey_sequence": "Win+Shift+V",
     },
 }
 
@@ -296,8 +304,6 @@ class SettingsManager:
                 raise ValueError(f"Ollama URL must point to local loopback (localhost, 127.0.0.1, ::1). Got: {value}")
 
         self.save_settings(self.settings)
-
-from urllib.parse import urlparse
 
 def is_loopback_url(url: str) -> bool:
     """Returns True if the URL points strictly to a local loopback address (localhost, 127.0.0.1, ::1)."""

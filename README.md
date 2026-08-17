@@ -21,7 +21,7 @@ the hard-coded privacy gate.
   staging-only unless a separate production-promotion plan is approved.
 
 The current delivery sequence and exit gates are tracked in
-[docs/phase-2e-delivery-plan.md](docs/phase-2e-delivery-plan.md).
+[docs/phase-2e-delivery-plan.md](docs/phase-2e-delivery-plan.md), and the long-term feature roadmap is tracked in [docs/cvn-improvement-and-feature-roadmap.md](docs/cvn-improvement-and-feature-roadmap.md).
 
 ## Architecture
 

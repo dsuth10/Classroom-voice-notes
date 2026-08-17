@@ -5,7 +5,9 @@ from app.config.settings import SettingsManager
 from app.audit.audit_logger import log_audit_event
 
 from app.audio.input_manager import AudioInputManager
+from app.audio.cue_manager import AudioCueManager
 from app.transcription.worker import PipelineWorker
+from app.utils.global_hotkey import GlobalHotkeyWorker
 
 class AppController(QObject):
     state_changed = Signal(str)
@@ -34,6 +36,9 @@ class AppController(QObject):
         self.command_worker: Any = None
         self.pipeline_worker: Any = None
         self.outbox_worker: Any = None
+        self.hotkey_worker: Any = None
+
+        self.cue_manager = AudioCueManager(self.settings_manager)
         
         self._is_cancelled = False
         
@@ -47,6 +52,9 @@ class AppController(QObject):
         
         # Start wake-phrase listening if enabled in settings
         self._start_wake_word_worker()
+
+        # Start global hotkey listener if enabled in settings
+        self._start_hotkey_worker()
 
         # Initialize and start the reminder checking engine
         from app.destinations.reminder_engine import ReminderEngine
@@ -92,6 +100,33 @@ class AppController(QObject):
         self.state = new_state.upper()
         log_audit_event("STATE_TRANSITION", "controller", f"Transitioned from {old_state} to {self.state}")
         self.state_changed.emit(self.state)
+
+    def _start_hotkey_worker(self) -> None:
+        if self.hotkey_worker:
+            return
+        enabled = self.settings_manager.get("system.hotkey_enabled")
+        if enabled is False:
+            return
+        sequence = self.settings_manager.get("system.hotkey_sequence") or "Win+Shift+V"
+        self.hotkey_worker = GlobalHotkeyWorker(sequence=sequence)
+        self.hotkey_worker.hotkey_triggered.connect(self.toggle_recording)
+        self.hotkey_worker.registration_failed.connect(
+            lambda err: log_audit_event("HOTKEY_REGISTRATION_FAILED", "controller", err)
+        )
+        self.hotkey_worker.start()
+
+    def _stop_hotkey_worker(self) -> None:
+        if not self.hotkey_worker:
+            return
+        self.hotkey_worker.stop()
+        self.hotkey_worker = None
+
+    def toggle_recording(self) -> None:
+        """Toggles between recording and saving (used by global hotkey and UI shortcuts)."""
+        if self.state in ("IDLE", "IDLE_LISTENING"):
+            self.start_recording()
+        elif self.state == "RECORDING":
+            self.stop_and_save()
 
     def _start_wake_word_worker(self) -> None:
         if self.wakeword_worker:
@@ -148,6 +183,7 @@ class AppController(QObject):
         
         self.set_state("RECORDING")
         self.elapsed_seconds = 0.0
+        self.cue_manager.play("start")
         
         # Setup output path
         from app.utils.paths import get_temp_audio_dir
@@ -214,6 +250,7 @@ class AppController(QObject):
         self.audio_input_manager.unsubscribe(self.recorder_worker.queue)
         self.recorder_worker.stop_recording()
         
+        self.cue_manager.play("cancelled")
         # Transition back to listening
         self.set_state("IDLE_LISTENING")
         self._start_wake_word_worker()
@@ -257,6 +294,7 @@ class AppController(QObject):
     def _on_pipeline_finished(self, note_path: str) -> None:
         self.note_saved.emit(note_path)
         self.pipeline_finished.emit(note_path)
+        self.cue_manager.play("saved")
         self.set_state("IDLE_LISTENING")
         self._start_wake_word_worker()
         self.pipeline_worker = None
@@ -273,6 +311,7 @@ class AppController(QObject):
 
     def _on_pipeline_error(self, err_msg: str) -> None:
         self.error_occurred.emit(err_msg)
+        self.cue_manager.play("error")
         self.set_state("ERROR")
         self.set_state("IDLE_LISTENING")
         self._start_wake_word_worker()
@@ -280,6 +319,7 @@ class AppController(QObject):
 
     def _on_recording_error(self, err_msg: str) -> None:
         self.error_occurred.emit(err_msg)
+        self.cue_manager.play("error")
         self.set_state("ERROR")
         self.recorder_worker = None
 
@@ -354,6 +394,13 @@ class AppController(QObject):
             # Defer engine rebuild to after the current Qt event completes
             QTimer.singleShot(0, self._start_wake_word_worker)
 
+        # Rebuild sound cues with any new volume/enabled setting
+        self.cue_manager.build_cues()
+
+        # Restart hotkey worker if sequence or enabled state changed
+        self._stop_hotkey_worker()
+        self._start_hotkey_worker()
+
         # Restart or stop the outbox retry timer depending on settings
         if hasattr(self, "outbox_retry_timer") and self.outbox_retry_timer:
             self.outbox_retry_timer.stop()
@@ -384,6 +431,7 @@ class AppController(QObject):
             if not self.outbox_worker.isRunning():
                 self.outbox_worker = None
         self._stop_timers()
+        self._stop_hotkey_worker()
         self._stop_wake_word_worker()
         self._stop_command_worker()
         if self.recorder_worker:
