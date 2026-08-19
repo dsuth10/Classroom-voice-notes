@@ -122,12 +122,12 @@ def test_email_action_repairs_owner_alias_and_standalone_confirmation(
 
     assert result["task"]["instructions"] == (
         'Send an email to me with subject "CVN audio action test" '
-        'and body "audio action okay".\n\nCONFIRM ACTION'
+        'and body "audio action okay"\n\nCONFIRM ACTION'
     )
 
 
 @patch("app.ollama_router.classifier.httpx.post")
-def test_email_action_does_not_repair_arbitrary_recipient(mock_post: MagicMock) -> None:
+def test_email_action_preserves_arbitrary_recipient_fields(mock_post: MagicMock) -> None:
     original = "Send an email to the principal for review."
     mock_post.return_value = _ollama_response(
         {
@@ -144,4 +144,6 @@ def test_email_action_does_not_repair_arbitrary_recipient(mock_post: MagicMock) 
         "OpenClaw send an email to the principal with subject Update and body Hello."
     )
 
-    assert result["task"]["instructions"] == original
+    assert result["task"]["instructions"] == (
+        'Send an email to the principal with subject "Update" and body "Hello."'
+    )

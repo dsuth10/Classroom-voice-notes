@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "data_classification": "synthetic_only_no_real_student_data",
+  "cases": [
+    {
+      "id": "ordinary_classroom_note",
+      "kind": "ordinary_note",
+      "source": "clean_transcript",
+      "transcript": "The Year 6 class settled quickly after lunch and the fraction card warm-up took about ten minutes.",
+      "recorded_at": "2026-08-19T03:00:00+00:00",
+      "duration_seconds": 9,
+      "simulated_latency_ms": 420,
+      "run_with_live_model": true,
+      "scripted_result": {
+        "route": "local_obsidian",
+        "sensitivity": "teacher_private",
+        "category": "general_note",
+        "title": "Fraction warm-up note",
+        "summary": "The class settled quickly and completed a ten-minute fraction warm-up.",
+        "contains_student_information": false,
+        "contains_external_task": false,
+        "telegram_allowed": false,
+        "requires_review": false,
+        "confidence": 0.97,
+        "agent_target": null,
+        "task": null,
+        "category_fields": {}
+      },
+      "expected": {
+        "route": "local_obsidian",
+        "category": "general_note",
+        "telegram_allowed": false
+      }
+    },
+    {
+      "id": "student_sensitive_observation",
+      "kind": "student_sensitive_observation",
+      "source": "clean_transcript",
+      "transcript": "Mia became distressed during reading and told me she had not eaten breakfast. I moved her to the quiet table and contacted student support.",
+      "recorded_at": "2026-08-19T03:05:00+00:00",
+      "duration_seconds": 14,
+      "simulated_latency_ms": 510,
+      "run_with_live_model": true,
+      "scripted_result": {
+        "route": "local_student_note",
+        "sensitivity": "student_sensitive",
+        "category": "student_note",
+        "title": "Student wellbeing observation",
+        "summary": "A student wellbeing observation and the support action taken.",
+        "contains_student_information": true,
+        "contains_external_task": false,
+        "telegram_allowed": false,
+        "requires_review": false,
+        "confidence": 0.99,
+        "agent_target": null,
+        "task": null,
+        "category_fields": {
+          "students_mentioned": ["Mia"],
+          "behaviour_type": "welfare",
+          "action_taken": "Moved to the quiet table and contacted student support"
+        }
+      },
+      "expected": {
+        "route": "local_student_note",
+        "sensitivity": "student_sensitive",
+        "contains_student_information": true,
+        "telegram_allowed": false
+      }
+    },
+    {
+      "id": "teacher_reminder",
+      "kind": "reminder",
+      "source": "clean_transcript",
+      "transcript": "Remind me tomorrow at 7:45 am to print the science safety sheets.",
+      "recorded_at": "2026-08-19T03:10:00+00:00",
+      "duration_seconds": 6,
+      "simulated_latency_ms": 390,
+      "run_with_live_model": true,
+      "scripted_result": {
+        "route": "local_reminder",
+        "sensitivity": "teacher_private",
+        "category": "reminder",
+        "title": "Print science safety sheets",
+        "summary": "Print the science safety sheets before class.",
+        "contains_student_information": false,
+        "contains_external_task": false,
+        "telegram_allowed": false,
+        "requires_review": false,
+        "reminder_time": "2026-08-20 07:45:00",
+        "confidence": 0.98,
+        "agent_target": null,
+        "task": null,
+        "category_fields": {}
+      },
+      "expected": {
+        "route": "local_reminder",
+        "category": "reminder",
+        "reminder_time": "2026-08-20 07:45:00",
+        "telegram_allowed": false
+      }
+    },
+    {
+      "id": "draft_email_request",
+      "kind": "draft_email",
+      "source": "clean_transcript",
+      "transcript": "Draft an email to the Year 6 families with subject Excursion hats and body Please pack a broad-brimmed hat on Friday. Do not send it.",
+      "recorded_at": "2026-08-19T03:15:00+00:00",
+      "duration_seconds": 11,
+      "simulated_latency_ms": 480,
+      "run_with_live_model": true,
+      "scripted_result": {
+        "route": "email_draft",
+        "sensitivity": "non_sensitive",
+        "category": "email_draft",
+        "title": "Draft excursion hat email",
+        "summary": "Draft an email to the Year 6 families with subject Excursion hats and body Please pack a broad-brimmed hat on Friday.",
+        "contains_student_information": false,
+        "contains_external_task": false,
+        "telegram_allowed": false,
+        "requires_review": true,
+        "confidence": 0.99,
+        "agent_target": null,
+        "task": null,
+        "category_fields": {
+          "recipient": "the Year 6 families",
+          "subject_line": "Excursion hats"
+        }
+      },
+      "expected": {
+        "route": "email_draft",
+        "category": "email_draft",
+        "requires_review": true,
+        "telegram_allowed": false,
+        "category_fields.recipient": "the Year 6 families",
+        "category_fields.subject_line": "Excursion hats",
+        "summary": "Draft an email to the Year 6 families with subject Excursion hats and body Please pack a broad-brimmed hat on Friday."
+      }
+    },
+    {
+      "id": "confirmed_send_email_action",
+      "kind": "confirmed_send_email",
+      "source": "clean_transcript",
+      "transcript": "OpenClaw send an email to me with subject CVN action check 8B and body The red folder is ready, please archive it. CONFIRM ACTION",
+      "recorded_at": "2026-08-19T03:20:00+00:00",
+      "duration_seconds": 12,
+      "simulated_latency_ms": 540,
+      "run_with_live_model": true,
+      "scripted_result": {
+        "route": "telegram_agent_task",
+        "sensitivity": "non_sensitive",
+        "category": "agent_task",
+        "title": "Send CVN action check email",
+        "summary": "Send the explicitly confirmed owner email.",
+        "contains_student_information": false,
+        "contains_external_task": true,
+        "telegram_allowed": true,
+        "requires_review": false,
+        "confidence": 0.99,
+        "agent_target": "openclaw",
+        "task": {
+          "title": "Send CVN action check email",
+          "instructions": "Send an email to me with subject \"CVN action check 8B\" and body \"The red folder is ready, please archive it.\"\n\nCONFIRM ACTION",
+          "priority": "normal"
+        },
+        "category_fields": {
+          "recipient": "me",
+          "subject_line": "CVN action check 8B"
+        }
+      },
+      "expected": {
+        "route": "telegram_agent_task",
+        "category": "agent_task",
+        "sensitivity": "non_sensitive",
+        "telegram_allowed": true,
+        "agent_target": "openclaw",
+        "category_fields.recipient": "me",
+        "category_fields.subject_line": "CVN action check 8B",
+        "task.instructions": "Send an email to me with subject \"CVN action check 8B\" and body \"The red folder is ready, please archive it.\"\n\nCONFIRM ACTION"
+      }
+    },
+    {
+      "id": "ollama_unavailable",
+      "kind": "ollama_unavailable",
+      "source": "injected_failure",
+      "transcript": "Find three general fraction warm-up activities for next week.",
+      "recorded_at": "2026-08-19T03:25:00+00:00",
+      "duration_seconds": 7,
+      "simulated_latency_ms": 65,
+      "run_with_live_model": false,
+      "scripted_result": {
+        "route": "review_queue",
+        "sensitivity": "unknown",
+        "category": "unknown",
+        "title": "Unclassified note",
+        "summary": "Classification failed closed because the local model was unavailable.",
+        "contains_student_information": false,
+        "contains_external_task": false,
+        "telegram_allowed": false,
+        "requires_review": true,
+        "confidence": 0.0,
+        "agent_target": null,
+        "task": null,
+        "category_fields": {}
+      },
+      "expected": {
+        "route": "review_queue",
+        "category": "unknown",
+        "sensitivity": "unknown",
+        "telegram_allowed": false,
+        "requires_review": true,
+        "confidence": 0.0
+      }
+    },
+    {
+      "id": "ollama_malformed_response",
+      "kind": "malformed_response",
+      "source": "injected_failure",
+      "transcript": "OpenClaw prepare a generic checklist for setting up tomorrow's projector.",
+      "recorded_at": "2026-08-19T03:30:00+00:00",
+      "duration_seconds": 8,
+      "simulated_latency_ms": 78,
+      "run_with_live_model": false,
+      "scripted_result": {
+        "route": "review_queue",
+        "sensitivity": "unknown",
+        "category": "unknown",
+        "title": "Unclassified note",
+        "summary": "Classification failed closed because the model response was malformed.",
+        "contains_student_information": false,
+        "contains_external_task": false,
+        "telegram_allowed": false,
+        "requires_review": true,
+        "confidence": 0.0,
+        "agent_target": null,
+        "task": null,
+        "category_fields": {}
+      },
+      "expected": {
+        "route": "review_queue",
+        "category": "unknown",
+        "sensitivity": "unknown",
+        "telegram_allowed": false,
+        "requires_review": true,
+        "confidence": 0.0
+      }
+    },
+    {
+      "id": "noisy_classroom_audio_transcript",
+      "kind": "noisy_classroom_audio",
+      "source": "prerecorded_audio_transcript_fixture",
+      "transcript": "[chairs scraping] reminder me um remind me Friday at three thirty to charge the class microphones [students talking]",
+      "recorded_at": "2026-08-19T03:35:00+00:00",
+      "duration_seconds": 10,
+      "simulated_latency_ms": 610,
+      "run_with_live_model": true,
+      "scripted_result": {
+        "route": "local_reminder",
+        "sensitivity": "teacher_private",
+        "category": "reminder",
+        "title": "Charge class microphones",
+        "summary": "Charge the class microphones on Friday afternoon.",
+        "contains_student_information": false,
+        "contains_external_task": false,
+        "telegram_allowed": false,
+        "requires_review": false,
+        "reminder_time": "2026-08-21 15:30:00",
+        "confidence": 0.89,
+        "agent_target": null,
+        "task": null,
+        "category_fields": {}
+      },
+      "expected": {
+        "route": "local_reminder",
+        "category": "reminder",
+        "telegram_allowed": false,
+        "reminder_time": "2026-08-21 15:30:00"
+      }
+    }
+  ]
+}

@@ -1,200 +1,595 @@
 import json
-import httpx
 import re
 import time
+from datetime import datetime
+from enum import Enum
 from typing import Any, Dict
+
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
 from app.audit.audit_logger import log_audit_event
 from app.config.settings import is_loopback_url
 
+
+class _ValueEnum(str, Enum):
+    pass
+
+
+class Route(_ValueEnum):
+    LOCAL_OBSIDIAN = "local_obsidian"
+    LOCAL_STUDENT_NOTE = "local_student_note"
+    LOCAL_REMINDER = "local_reminder"
+    TELEGRAM_AGENT_TASK = "telegram_agent_task"
+    EMAIL_DRAFT = "email_draft"
+    REVIEW_QUEUE = "review_queue"
+    DISCARD_CANCELLED = "discard_cancelled"
+
+
+class Sensitivity(_ValueEnum):
+    STUDENT_SENSITIVE = "student_sensitive"
+    TEACHER_PRIVATE = "teacher_private"
+    NON_SENSITIVE = "non_sensitive"
+    SCHOOL_SENSITIVE = "school_sensitive"
+    UNKNOWN = "unknown"
+
+
+class Category(_ValueEnum):
+    STUDENT_NOTE = "student_note"
+    BEHAVIOUR_NOTE = "behaviour_note"
+    MATHS_NOTE = "maths_note"
+    ENGLISH_NOTE = "english_note"
+    SCIENCE_NOTE = "science_note"
+    HASS_NOTE = "hass_note"
+    DIGITECH_NOTE = "digitech_note"
+    DESIGNTECH_NOTE = "designtech_note"
+    REMINDER = "reminder"
+    EMAIL_DRAFT = "email_draft"
+    AGENT_TASK = "agent_task"
+    GENERAL_NOTE = "general_note"
+    UNKNOWN = "unknown"
+
+
+class AgentTarget(_ValueEnum):
+    HERMES = "hermes"
+    OPENCLAW = "openclaw"
+    AUTO = "auto"
+
+
+class Priority(_ValueEnum):
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+
+
+class TaskResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = "Agent task"
+    instructions: str = ""
+    priority: Priority = Priority.NORMAL
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def normalise_priority(cls, value: Any) -> Any:
+        return value.lower() if isinstance(value, str) else value
+
+
+class CategoryFields(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    students_mentioned: list[str] = Field(default_factory=list)
+    strand: str | None = None
+    misconception_type: str | None = None
+    behaviour_type: str | None = None
+    action_taken: str | None = None
+    observation_type: str | None = None
+    year_level: str | None = None
+    investigation_type: str | None = None
+    text_type: str | None = None
+    recipient: str | None = None
+    subject_line: str | None = None
+    priority: Priority | None = None
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def normalise_priority(cls, value: Any) -> Any:
+        return value.lower() if isinstance(value, str) else value
+
+
+class ClassificationResult(BaseModel):
+    """Validated response contract sent directly to Ollama as its JSON schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    route: Route = Route.LOCAL_OBSIDIAN
+    sensitivity: Sensitivity = Sensitivity.UNKNOWN
+    category: Category = Category.GENERAL_NOTE
+    title: str = "Voice Note"
+    summary: str = ""
+    contains_student_information: bool | None = None
+    contains_external_task: bool = False
+    telegram_allowed: bool = False
+    requires_review: bool = False
+    recommended_destination: str = ""
+    reminder_time: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    agent_target: AgentTarget | None = None
+    task: TaskResult | None = None
+    category_fields: CategoryFields = Field(default_factory=CategoryFields)
+
+
 class OllamaClassifier:
-    def __init__(self, url: str = "http://localhost:11434", model: str = "qwen3.5:latest") -> None:
+    def __init__(
+        self,
+        url: str = "http://localhost:11434",
+        model: str = "qwen3.5:latest",
+        fallback_model: str | None = "phi4-mini:3.8b",
+        total_budget_seconds: float = 18.0,
+    ) -> None:
         if not is_loopback_url(url):
-            log_audit_event("SECURITY_ERROR", "classifier", f"Attempted to configure non-loopback Ollama URL: {url}")
-            raise ValueError(f"Ollama URL must point to local loopback (localhost, 127.0.0.1, ::1). Got: {url}")
+            log_audit_event(
+                "SECURITY_ERROR",
+                "classifier",
+                f"Attempted to configure non-loopback Ollama URL: {url}",
+            )
+            raise ValueError(
+                "Ollama URL must point to local loopback "
+                f"(localhost, 127.0.0.1, ::1). Got: {url}"
+            )
         self.url = url
         self.model = model
+        self.fallback_model = fallback_model
+        self.total_budget_seconds = min(max(float(total_budget_seconds), 1.0), 120.0)
 
-    def classify(self, transcript: str, recorded_at: str = "", duration_seconds: int = 0) -> Dict[str, Any]:
-        """Calls the local Ollama HTTP API to classify the transcript text into structured categories."""
+    def classify(
+        self,
+        transcript: str,
+        recorded_at: str = "",
+        duration_seconds: int = 0,
+    ) -> Dict[str, Any]:
+        """Classify once per model under one deadline, then fail closed."""
         if not is_loopback_url(self.url):
-            log_audit_event("SECURITY_ERROR", "classifier", f"Refusing classification with non-loopback Ollama URL: {self.url}")
-            raise ValueError(f"Ollama URL must point to local loopback (localhost, 127.0.0.1, ::1). Got: {self.url}")
-        log_audit_event("CLASSIFICATION_START", "session", f"Classifying transcript via Ollama model: {self.model}")
+            log_audit_event(
+                "SECURITY_ERROR",
+                "classifier",
+                f"Refusing classification with non-loopback Ollama URL: {self.url}",
+            )
+            raise ValueError(
+                "Ollama URL must point to local loopback "
+                f"(localhost, 127.0.0.1, ::1). Got: {self.url}"
+            )
 
-        
-        prompt = f"""
-        You are a local routing classifier for a teacher voice-note application.
-        Your job is to classify a transcript and return strict JSON only.
+        started = time.monotonic()
+        deadline = started + self.total_budget_seconds
+        models = [self.model]
+        if self.fallback_model and self.fallback_model != self.model:
+            models.append(self.fallback_model)
 
-        Hard rules:
-        - Student names, student achievement, behaviour, welfare, absence, pickup, family, medical, emotional, support or assessment information must stay local.
-        - If the transcript may contain student-sensitive information, telegram_allowed must be false.
-        - If the transcript asks an agent to perform research, planning, communication, automation, software, file, calendar, email, or other professional work and contains no student-sensitive information, route it to telegram_agent_task with category agent_task.
-        - Distinguish drafting from acting: "draft an email" is email_draft and requires review; "send an email" is an agent_task whose task instructions explicitly say to send it.
-        - For every agent_task, return a self-contained task object with a short title, executable instructions, and priority. Preserve exact requested literals, recipients expressed as safe aliases such as "me", dates, success criteria, and the exact phrase "CONFIRM ACTION" when spoken. Do not copy the whole raw transcript or include student information, contact details, local paths, or audio paths.
-        - If uncertain, route to review_queue.
-        - Do not invent facts.
-        - Do not send normal classroom notes externally.
-        - Return JSON only.
-        
-        JSON format:
-        {{
-            "route": "local_obsidian" | "local_student_note" | "local_reminder" | "telegram_agent_task" | "email_draft" | "review_queue" | "discard_cancelled",
-            "sensitivity": "student_sensitive" | "teacher_private" | "non_sensitive" | "school_sensitive" | "unknown",
-            "category": "student_note" | "behaviour_note" | "maths_note" | "english_note" | "science_note" | "hass_note" | "digitech_note" | "designtech_note" | "reminder" | "email_draft" | "agent_task" | "general_note" | "unknown",
-            "title": "<short descriptive title>",
-            "summary": "<1 sentence summary>",
-            "contains_student_information": <bool>,
-            "contains_external_task": <bool>,
-            "telegram_allowed": <bool>,
-            "requires_review": <bool>,
-            "recommended_destination": "<recommended folder or service>",
-            "reminder_time": "<YYYY-MM-DD HH:MM:SS or null>",
-            "tags": ["<tag1>", "<tag2>"],
-            "confidence": <0.0 to 1.0>,
-            "agent_target": "hermes" | "openclaw" | "auto" | null,
-            "task": {{
-                "title": "<short action title>",
-                "instructions": "<self-contained instructions for the agent>",
-                "priority": "low" | "normal" | "high"
-            }} or null,
-            "category_fields": {{
-                "students_mentioned": ["<first name 1>", "<first name 2>"] or [],
-                "strand": "<Australian Curriculum v9 Strand name or null>",
-                "misconception_type": "<description of maths misconception or null>",
-                "behaviour_type": "<disruption|positive|welfare|safety|academic|null>",
-                "action_taken": "<description of action e.g. verbal warning|parent contact|null>",
-                "observation_type": "<academic progress|general observation|wellbeing|null>",
-                "year_level": "<e.g. Year 5|Year 6|null>",
-                "investigation_type": "<type of science investigation or null>",
-                "text_type": "<type of english text studied e.g. persuasive|narrative|null>",
-                "recipient": "<intended recipient name/email or null>",
-                "subject_line": "<suggested subject line for email or null>",
-                "priority": "<low|normal|high|null>"
-            }}
-        }}
+        log_audit_event(
+            "CLASSIFICATION_START",
+            "session",
+            f"models={models}; total_budget_seconds={self.total_budget_seconds:.3f}",
+        )
 
-        Agent Target Guidance:
-        - Set to "hermes" if the transcript explicitly mentions "Hermes" or if it is a general planning, research, or instructional content request.
-        - Set to "openclaw" if the transcript explicitly mentions "OpenClaw" or asks for code generation, software development, data parsing, or direct analytical processing.
-        - Set to "auto" if it is an agent task but no specific agent is named.
-        - Set to null if it is not an agent task.
+        prompt = self._build_prompt(transcript, recorded_at, duration_seconds)
+        schema = self._ollama_schema()
+        last_valid: ClassificationResult | None = None
 
-        Category Fields Guidance:
-        - Populate `students_mentioned` with student first names mentioned in the text.
-        - Populate curriculum fields (strand, year_level, misconception_type, etc.) only if category relates to a subject note.
-        - Set unused/irrelevant fields within `category_fields` to null.
-        
-        Context:
-        - Recorded at: {recorded_at}
-        - Duration: {duration_seconds} seconds
-        
-        Transcript: "{transcript}"
-        """
-        
+        for attempt_index, model in enumerate(models):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+
+            # Reserve one quarter of the total budget for the smaller fallback.
+            # The primary needs enough room for a cold local model load while
+            # still staying below the 15-second p95 target on an 18-second budget.
+            request_timeout = remaining
+            if attempt_index == 0 and len(models) > 1:
+                request_timeout = min(remaining, max(1.0, self.total_budget_seconds * 0.75))
+
+            attempt_started = time.monotonic()
+            try:
+                result = self._classify_with_model(
+                    model=model,
+                    prompt=prompt,
+                    schema=schema,
+                    timeout_seconds=request_timeout,
+                )
+                result = self._normalise_result(result, transcript)
+                last_valid = result
+                uncertain = self._privacy_uncertain(result)
+                elapsed = time.monotonic() - attempt_started
+                log_audit_event(
+                    "CLASSIFICATION_ATTEMPT",
+                    "session",
+                    f"model={model}; outcome={'uncertain' if uncertain else 'success'}; "
+                    f"elapsed_seconds={elapsed:.3f}",
+                )
+                if not uncertain:
+                    return self._success(result, model, started)
+            except (httpx.HTTPError, RuntimeError, ValueError, ValidationError, json.JSONDecodeError) as exc:
+                elapsed = time.monotonic() - attempt_started
+                log_audit_event(
+                    "CLASSIFICATION_ATTEMPT",
+                    "session",
+                    f"model={model}; outcome=error; elapsed_seconds={elapsed:.3f}; "
+                    f"error_type={type(exc).__name__}",
+                )
+            except Exception as exc:
+                # A local API response must never escape validation due to an
+                # unexpected parsing failure.
+                elapsed = time.monotonic() - attempt_started
+                log_audit_event(
+                    "CLASSIFICATION_ATTEMPT",
+                    "session",
+                    f"model={model}; outcome=error; elapsed_seconds={elapsed:.3f}; "
+                    f"error_type={type(exc).__name__}",
+                )
+
+        if last_valid is not None:
+            closed = self._fail_closed(last_valid)
+            return self._success(closed, "fail_closed", started)
+
+        total_elapsed = time.monotonic() - started
+        log_audit_event(
+            "CLASSIFICATION_ERROR",
+            "session",
+            f"All bounded attempts failed; elapsed_seconds={total_elapsed:.3f}",
+        )
+        return self._failure_result()
+
+    def _classify_with_model(
+        self,
+        model: str,
+        prompt: str,
+        schema: Dict[str, Any],
+        timeout_seconds: float,
+    ) -> ClassificationResult:
         payload = {
-            "model": self.model,
+            "model": model,
             "prompt": prompt,
             "stream": False,
-            "format": "json"
+            "format": schema,
+            "think": False,
+            "keep_alive": "10m",
+            "options": {
+                "temperature": 0,
+                "num_ctx": 4096,
+                "num_predict": 512,
+            },
         }
-        
-        max_retries = 2
-        for attempt in range(max_retries + 1):
+        response = httpx.post(
+            f"{self.url}/api/generate",
+            json=payload,
+            timeout=timeout_seconds,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Ollama server returned status code: {response.status_code}")
+
+        data = response.json()
+        raw_text = str(data.get("response") or "").strip()
+        if not raw_text:
+            raise ValueError("Ollama response did not contain structured output")
+        return ClassificationResult.model_validate_json(raw_text)
+
+    @staticmethod
+    def _ollama_schema() -> Dict[str, Any]:
+        """Return a strict generation schema without output-biasing defaults.
+
+        Pydantic defaults remain useful when normalising older test fixtures, but
+        exposing those defaults to a small local model encourages it to copy an
+        effectively empty classification. Ollama instead receives a schema in
+        which every object property is required and additional fields are
+        forbidden by the underlying Pydantic models.
+        """
+        schema = ClassificationResult.model_json_schema()
+
+        def tighten(node: Any) -> None:
+            if isinstance(node, dict):
+                node.pop("default", None)
+                properties = node.get("properties")
+                if isinstance(properties, dict):
+                    node["required"] = list(properties)
+                for value in node.values():
+                    tighten(value)
+            elif isinstance(node, list):
+                for value in node:
+                    tighten(value)
+
+        tighten(schema)
+        return schema
+
+    def _normalise_result(
+        self,
+        result: ClassificationResult,
+        transcript: str,
+    ) -> ClassificationResult:
+        self._normalise_email_intent(result, transcript)
+        self._normalise_cohort_note(result, transcript)
+
+        if result.category == Category.REMINDER and result.reminder_time:
             try:
-                response = httpx.post(f"{self.url}/api/generate", json=payload, timeout=30.0)
-                if response.status_code != 200:
-                    raise RuntimeError(f"Ollama server returned status code: {response.status_code}")
-                    
-                data = response.json()
-                
-                # Extract JSON string: check 'response' first, then 'thinking'
-                raw_text = data.get("response", "").strip()
-                if not raw_text and "thinking" in data:
-                    raw_text = data.get("thinking", "").strip()
-                    
-                json_str = raw_text
-                start_idx = raw_text.find('{')
-                end_idx = raw_text.rfind('}')
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    json_str = raw_text[start_idx:end_idx + 1]
-                
-                result: Dict[str, Any] = json.loads(json_str)
-                
-                # Ensure required keys exist with safe defaults
-                if "category" not in result:
-                    result["category"] = "general_note"
-                if "sensitivity" not in result:
-                    result["sensitivity"] = "teacher_private"
-                if "confidence" not in result:
-                    result["confidence"] = 0.5
-                if "route" not in result:
-                    result["route"] = "local_obsidian"
-                if "telegram_allowed" not in result:
-                    result["telegram_allowed"] = False
-                if "agent_target" not in result:
-                    result["agent_target"] = "auto" if result.get("category") == "agent_task" else None
-                if result.get("category") == "agent_task":
-                    task = result.get("task")
-                    if not isinstance(task, dict):
-                        task = {}
-
-                    task_title = str(task.get("title") or result.get("title") or "Agent task").strip()
-                    task_instructions = str(
-                        task.get("instructions") or result.get("summary") or ""
-                    ).strip()
-                    task_instructions = self._repair_explicit_email_action(
-                        transcript,
-                        result.get("category_fields"),
-                        task_instructions,
-                    )
-                    task_priority = str(task.get("priority") or "normal").strip().lower()
-                    if task_priority not in {"low", "normal", "high"}:
-                        task_priority = "normal"
-
-                    result["task"] = {
-                        "title": task_title,
-                        "instructions": task_instructions,
-                        "priority": task_priority,
-                    }
-                else:
-                    result["task"] = None
-                if "category_fields" not in result or not isinstance(result["category_fields"], dict):
-                    result["category_fields"] = {}
-                    
-                log_audit_event(
-                    "CLASSIFICATION_SUCCESS",
-                    "session",
-                    f"Classification result: category={result['category']}, sensitivity={result['sensitivity']}, agent_target={result.get('agent_target')}"
+                parsed_reminder = datetime.fromisoformat(
+                    result.reminder_time.replace("Z", "+00:00")
                 )
-                return result
-                
-            except Exception as e:
-                log_audit_event("CLASSIFICATION_ERROR", "session", f"Ollama classification failed (attempt {attempt+1}): {e}")
-                if attempt < max_retries:
-                    time.sleep(2)
-                else:
-                    return {
-                        "category": "review_queue",
-                        "route": "review_queue",
-                        "sensitivity": "unknown",
-                        "confidence": 0.0,
-                        "title": "Unclassified Note",
-                        "summary": "Classification failed.",
-                        "telegram_allowed": False,
-                        "agent_target": None,
-                        "category_fields": {}
-                    }
-        
-        return {
-            "category": "review_queue",
-            "route": "review_queue",
-            "sensitivity": "unknown",
-            "confidence": 0.0,
-            "telegram_allowed": False,
-            "agent_target": None,
-            "category_fields": {}
-        }
+                result.reminder_time = parsed_reminder.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # Keep the model value for downstream review if it is not ISO-like.
+                pass
+
+        if result.category == Category.AGENT_TASK:
+            task = result.task or TaskResult(
+                title=result.title or "Agent task",
+                instructions=result.summary,
+            )
+            instructions = self._repair_explicit_email_action(
+                transcript,
+                result.category_fields.model_dump(mode="json"),
+                task.instructions,
+            )
+            instructions = self._enforce_confirmation_semantics(transcript, instructions)
+            result.task = TaskResult(
+                title=(task.title or result.title or "Agent task").strip(),
+                instructions=instructions,
+                priority=task.priority,
+            )
+            if result.agent_target is None:
+                result.agent_target = AgentTarget.AUTO
+        else:
+            result.task = None
+
+        safe_external = (
+            result.category == Category.AGENT_TASK
+            and result.sensitivity == Sensitivity.NON_SENSITIVE
+            and result.contains_student_information is False
+            and result.confidence >= 0.75
+            and not result.requires_review
+        )
+        result.telegram_allowed = safe_external
+        return result
+
+    @staticmethod
+    def _privacy_uncertain(result: ClassificationResult) -> bool:
+        if result.confidence < 0.75 or result.sensitivity == Sensitivity.UNKNOWN:
+            return True
+        if result.category == Category.AGENT_TASK and (
+            result.sensitivity != Sensitivity.NON_SENSITIVE
+            or result.contains_student_information is not False
+        ):
+            return True
+        return False
+
+    def _normalise_email_intent(
+        self,
+        result: ClassificationResult,
+        transcript: str,
+    ) -> None:
+        """Preserve explicit email verbs and literals before safety decisions."""
+        normalised = " ".join(str(transcript).split())
+        do_not_send = bool(
+            re.search(r"\bdo\s+not\s+send\b|\bdon't\s+send\b", normalised, re.I)
+        )
+        send_requested = bool(
+            re.search(r"\bsend\s+(?:an?\s+)?email\b", normalised, re.I)
+        ) and not do_not_send
+        draft_requested = bool(
+            re.search(r"\bdraft\b.*\bemail\b", normalised, re.I)
+        ) and not send_requested
+
+        fields = result.category_fields
+        if draft_requested:
+            draft_match = re.search(
+                r"\bdraft\s+an?\s+email\s+to\s+(.+?)\s+with\s+subjects?\s+"
+                r"(.+?)\s+and\s+(?:the\s+)?body\s+(.+?)"
+                r"(?=\s+do\s+not\s+send\b|\s+don't\s+send\b|$)",
+                normalised,
+                re.I,
+            )
+            if draft_match:
+                recipient, subject, body = (part.strip() for part in draft_match.groups())
+                fields.recipient = recipient
+                fields.subject_line = subject
+                result.summary = (
+                    f"Draft an email to {recipient} with subject {subject} and body {body}"
+                )
+            result.route = Route.EMAIL_DRAFT
+            result.category = Category.EMAIL_DRAFT
+            result.contains_external_task = False
+            result.telegram_allowed = False
+            result.requires_review = True
+            result.agent_target = None
+            result.task = None
+            return
+
+        if not send_requested:
+            return
+
+        instructions = self._repair_explicit_email_action(
+            normalised,
+            fields.model_dump(mode="json"),
+            result.task.instructions if result.task else "",
+        )
+        recipient_match = re.search(
+            r"\bemail\s+to\s+(.+?)\s+with\s+subjects?\s+",
+            normalised,
+            re.I,
+        )
+        subject_match = re.search(
+            r"\bwith\s+subjects?\s+(.+?)\s+and\s+(?:the\s+)?body\s+",
+            normalised,
+            re.I,
+        )
+        if recipient_match:
+            fields.recipient = recipient_match.group(1).strip()
+        if subject_match:
+            fields.subject_line = subject_match.group(1).strip()
+
+        result.route = Route.TELEGRAM_AGENT_TASK
+        result.category = Category.AGENT_TASK
+        result.contains_external_task = True
+        result.agent_target = (
+            AgentTarget.OPENCLAW
+            if re.search(r"\bopenclaw\b", normalised, re.I)
+            else (result.agent_target or AgentTarget.AUTO)
+        )
+        result.task = TaskResult(
+            title=(result.task.title if result.task else result.title or "Send email"),
+            instructions=instructions,
+            priority=(result.task.priority if result.task else Priority.NORMAL),
+        )
+
+        sensitive_signal = re.search(
+            r"\b(student|child|pupil|parent|guardian|family|families|behaviou?r|"
+            r"welfare|medical|absence|pickup|assessment|achievement|support|injury|"
+            r"allerg(?:y|ic)|medication|year\s+\d+)\b",
+            normalised,
+            re.I,
+        )
+        if (
+            not sensitive_signal
+            and result.contains_student_information is not True
+            and result.sensitivity in {Sensitivity.NON_SENSITIVE, Sensitivity.TEACHER_PRIVATE}
+        ):
+            result.contains_student_information = False
+            result.sensitivity = Sensitivity.NON_SENSITIVE
+            result.requires_review = False
+
+    @staticmethod
+    def _normalise_cohort_note(
+        result: ClassificationResult,
+        transcript: str,
+    ) -> None:
+        """Do not treat a year-level cohort alone as an identifiable student."""
+        if result.category != Category.GENERAL_NOTE:
+            return
+        if not re.search(r"\byear\s+\d+\s+class\b", transcript, re.I):
+            return
+        mentioned = result.category_fields.students_mentioned
+        if mentioned and not all(
+            re.fullmatch(r"year\s+\d+\s+class", name.strip(), re.I)
+            for name in mentioned
+        ):
+            return
+        if re.search(
+            r"\b(welfare|medical|absence|pickup|family|behaviou?r|assessment|"
+            r"achievement|support|injury|allerg(?:y|ic)|medication)\b",
+            transcript,
+            re.I,
+        ):
+            return
+        result.route = Route.LOCAL_OBSIDIAN
+        result.sensitivity = Sensitivity.TEACHER_PRIVATE
+        result.contains_student_information = False
+        result.requires_review = False
+        result.category_fields.students_mentioned = []
+
+    @staticmethod
+    def _fail_closed(result: ClassificationResult) -> ClassificationResult:
+        result.route = Route.REVIEW_QUEUE
+        result.sensitivity = Sensitivity.UNKNOWN
+        result.telegram_allowed = False
+        result.requires_review = True
+        result.confidence = 0.0
+        return result
+
+    def _success(
+        self,
+        result: ClassificationResult,
+        model: str,
+        started: float,
+    ) -> Dict[str, Any]:
+        elapsed = time.monotonic() - started
+        log_audit_event(
+            "CLASSIFICATION_SUCCESS",
+            "session",
+            f"model={model}; category={result.category.value}; "
+            f"sensitivity={result.sensitivity.value}; elapsed_seconds={elapsed:.3f}",
+        )
+        return result.model_dump(mode="json")
+
+    @staticmethod
+    def _failure_result() -> Dict[str, Any]:
+        return ClassificationResult(
+            category=Category.UNKNOWN,
+            route=Route.REVIEW_QUEUE,
+            sensitivity=Sensitivity.UNKNOWN,
+            confidence=0.0,
+            title="Unclassified Note",
+            summary="Classification failed within the local time budget.",
+            telegram_allowed=False,
+            requires_review=True,
+        ).model_dump(mode="json")
+
+    @staticmethod
+    def _build_prompt(transcript: str, recorded_at: str, duration_seconds: int) -> str:
+        return f"""
+You are a local routing classifier for a teacher voice-note application.
+Classify the transcript using the supplied JSON schema. Do not add prose.
+
+Hard rules:
+- Student names, achievement, behaviour, welfare, absence, pickup, family,
+  medical, emotional, support or assessment information must stay local.
+- If student-sensitive information may be present, set sensitivity to unknown or
+  student_sensitive, telegram_allowed to false, and requires_review to true.
+- Research, planning, communication, automation, software, file, calendar and
+  email work with no student-sensitive information may be an agent_task.
+- "draft an email" is email_draft and requires review; "send an email" is an agent_task
+  whose task instructions explicitly say to send it.
+- For agent_task, produce a self-contained task object. Preserve exact recipients,
+  subjects, bodies, dates, success criteria and the exact phrase CONFIRM ACTION
+  when spoken. Never invent CONFIRM ACTION.
+- Do not invent facts or send normal classroom notes externally.
+- If uncertain, use review_queue, unknown sensitivity and requires_review true.
+
+Routing rules:
+- A request beginning with "remind me" is a local reminder: use category
+  reminder, route local_reminder, contains_external_task false, telegram_allowed
+  false, and resolve reminder_time as YYYY-MM-DD HH:MM:SS from Recorded at.
+- A request to draft but not send an email is category email_draft, route
+  email_draft, requires_review true and telegram_allowed false.
+- A request to send an email is category agent_task only when the sender actually
+  asks for sending; preserve its literal fields and confirmation separately.
+- Ordinary classroom observations are local general notes. Observations about an
+  identifiable student are local student notes and student_sensitive.
+- A year-level cohort such as "the Year 6 class" is not an identifiable student;
+  keep a cohort-only classroom note teacher_private unless individual details are
+  present.
+
+Sensitivity and review rules:
+- Use teacher_private, not unknown, for an ordinary local note or reminder that
+  contains no student information. Such a local item does not require review.
+- Use non_sensitive for a generic external task containing no student, contact,
+  credential, path or school-sensitive information.
+- Use student_sensitive whenever student information is present. Reserve unknown
+  for genuine ambiguity; do not mark every teacher request unknown by default.
+
+Agent target guidance:
+- hermes: explicitly named Hermes, or general planning/research/instruction.
+- openclaw: explicitly named OpenClaw, software, data or analytical processing.
+- auto: agent task with no explicitly named agent.
+- null: not an agent task.
+
+Context:
+- Recorded at: {recorded_at}
+- Duration: {duration_seconds} seconds
+
+Transcript: {json.dumps(transcript, ensure_ascii=False)}
+""".strip()
+
+    @staticmethod
+    def _enforce_confirmation_semantics(transcript: str, instructions: str) -> str:
+        spoken = bool(re.search(r"\bCONFIRM\s+ACTION\b", transcript, flags=re.IGNORECASE))
+        cleaned = re.sub(
+            r"(?:\s*\bCONFIRM\s+ACTION\b\s*)+",
+            " ",
+            instructions,
+            flags=re.IGNORECASE,
+        ).strip()
+        if spoken:
+            return f"{cleaned}\n\nCONFIRM ACTION" if cleaned else "CONFIRM ACTION"
+        return cleaned
 
     @staticmethod
     def _repair_explicit_email_action(
@@ -202,58 +597,54 @@ class OllamaClassifier:
         category_fields: Any,
         model_instructions: str,
     ) -> str:
-        """Preserve explicit owner-email commands when a local model paraphrases them.
-
-        This narrow repair deliberately applies only to send-email requests addressed
-        to the safe owner aliases ``me`` or ``myself``. It keeps authorization separate
-        from message content so a spoken confirmation cannot be swallowed into the body.
-        """
-        normalized = " ".join(str(transcript).split())
-        if not re.search(r"\bsend\b.*\bemail\b", normalized, flags=re.IGNORECASE):
+        """Reconstruct explicit send-email fields from the user's own words."""
+        normalised = " ".join(str(transcript).split())
+        if not re.search(r"\bsend\b.*\bemail\b", normalised, flags=re.IGNORECASE):
             return model_instructions
 
         fields = category_fields if isinstance(category_fields, dict) else {}
-        field_recipient = str(fields.get("recipient") or "").strip().lower()
-        owner_recipient = field_recipient in {"me", "myself"} or bool(
-            re.search(r"\bemail\s+to\s+(?:me|myself)\b", normalized, flags=re.IGNORECASE)
+        recipient_match = re.search(
+            r"\bemail\s+to\s+(.+?)\s+with\s+subjects?\s+",
+            normalised,
+            flags=re.IGNORECASE,
         )
-        if not owner_recipient:
-            return model_instructions
-
-        has_confirmation = bool(
-            re.search(r"\bconfirm\s+action\b", normalized, flags=re.IGNORECASE)
-        )
-        model_kept_owner = bool(
-            re.search(r"\bemail\s+to\s+(?:me|myself)\b", model_instructions, flags=re.IGNORECASE)
-        )
-        if model_kept_owner and not has_confirmation:
-            return model_instructions
-
         subject_match = re.search(
             r"\bwith\s+subjects?\s+(.+?)\s+and\s+(?:the\s+)?body\s+",
-            normalized,
+            normalised,
             flags=re.IGNORECASE,
         )
         body_match = re.search(
             r"\band\s+(?:the\s+)?body\s+(.+?)(?=\s+confirm\s+action\b|\s+save\b|$)",
-            normalized,
+            normalised,
             flags=re.IGNORECASE,
         )
+
+        recipient = (
+            recipient_match.group(1).strip()
+            if recipient_match
+            else str(fields.get("recipient") or "").strip()
+        )
         subject = (
-            subject_match.group(1).strip(" .,:;\"'")
+            subject_match.group(1).strip()
             if subject_match
             else str(fields.get("subject_line") or "").strip()
         )
-        body = body_match.group(1).strip(" .,:;\"'") if body_match else ""
-
-        # Only reconstruct when both user-authored message fields are available.
-        if not subject or not body:
+        body = body_match.group(1).strip() if body_match else ""
+        if not recipient or not subject or not body:
             return model_instructions
 
-        repaired = (
-            f"Send an email to me with subject {json.dumps(subject, ensure_ascii=False)} "
-            f"and body {json.dumps(body, ensure_ascii=False)}."
+        recipient_kept = bool(
+            re.search(
+                rf"\bemail\s+to\s+{re.escape(recipient)}\b",
+                model_instructions,
+                flags=re.IGNORECASE,
+            )
         )
-        if has_confirmation:
-            repaired += "\n\nCONFIRM ACTION"
-        return repaired
+        if recipient_kept and subject in model_instructions and body in model_instructions:
+            return model_instructions
+
+        return (
+            f"Send an email to {recipient} with subject "
+            f"{json.dumps(subject, ensure_ascii=False)} and body "
+            f"{json.dumps(body, ensure_ascii=False)}"
+        )

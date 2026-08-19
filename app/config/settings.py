@@ -22,6 +22,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "ollama_url": "http://localhost:11434",
     "fast_model": "qwen3.5:latest",
     "careful_model": "phi4:14b",
+    "fallback_model": "phi4-mini:3.8b",
+    "classification_total_budget_seconds": 18.0,
     "agents": {
         "enabled": False,
         "telegram_token": "",

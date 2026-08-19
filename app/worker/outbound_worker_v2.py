@@ -471,15 +471,29 @@ class OutboundWorkerV2:
             result_payload["result_reference"] = res_ref
             return self.complete_item(item_id, lease_token, payload_hash, content_hash, result_payload)
 
-        # 6. Invoke routing consumer
+        # 6. Invoke routing consumer. Record only duration and routing identity;
+        # never include task content in operational timing telemetry.
+        execution_started = time.perf_counter()
         try:
             success, error_code_or_ref, res_dict = self.route_and_process(item, validated_payload)
         except FatalWorkerError:
             # Fatal gateway auth/config error must propagate to main loop and exit process without modifying remote item
             raise
+        finally:
+            execution_duration_ms = round(
+                (time.perf_counter() - execution_started) * 1000,
+                1,
+            )
+            logger.info(
+                "WORKER_EXECUTION_TIMING item_id=%s kind=%s duration_ms=%.1f",
+                item_id,
+                item_kind,
+                execution_duration_ms,
+            )
 
         if success:
             result_payload["result_reference"] = error_code_or_ref
+            result_payload["execution_duration_ms"] = execution_duration_ms
             if res_dict:
                 result_payload["summary"] = res_dict.get("status") or "succeeded"
 

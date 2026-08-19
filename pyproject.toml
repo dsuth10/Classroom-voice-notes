@@ -8,6 +8,7 @@ dependencies = [
     "PySide6>=6.6.0",
     "sounddevice>=0.4.6",
     "httpx>=0.25.0",
+    "pydantic>=2.7.0,<3",
     "pvporcupine>=3.0.0",
     "python-dotenv>=1.0.0",
     "openwakeword>=0.6.0",
@@ -104,6 +105,5 @@ ignore = []
 dev = [
     "ruff>=0.15.17",
 ]
-
 
 

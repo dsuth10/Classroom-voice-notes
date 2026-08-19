@@ -321,3 +321,47 @@ def test_log_hygiene_redacts_secrets_and_leases(base_worker_env: None, temp_jour
         assert secret_lease not in captured_text
         assert "test-hmac-secret" not in captured_text
         assert "test-bearer-token" not in captured_text
+        assert "WORKER_EXECUTION_TIMING" in captured_text
+        assert "duration_ms=" in captured_text
+
+
+def test_completion_payload_records_execution_duration(
+    base_worker_env: None,
+    temp_journal: WorkerJournal,
+) -> None:
+    worker = OutboundWorkerV2(journal=temp_journal)
+    content_data: Dict[str, Any] = {"title": "Timing test"}
+    _, valid_hash = compute_canonical_content_hash(
+        "record_only", "openclaw", content_data
+    )
+    item: Dict[str, Any] = {
+        "item_id": "item-execution-timing",
+        "lease_token": "test_mock_lease_token_timing",
+        "payload_hash": valid_hash,
+        "content_hash": valid_hash,
+        "item_kind": "record_only",
+        "target_agent": "openclaw",
+        "lease_expires_at": time.time() + 600.0,
+        "payload": {
+            "schema_version": "cvn.outbound_item.v2",
+            "item_kind": "record_only",
+            "target_agent": "openclaw",
+            "item_id": "item-execution-timing",
+            "source_device_id": "dev-01",
+            "created_at": "2026-08-03T10:00:00Z",
+            "content_hash": valid_hash,
+            "content": content_data,
+            "privacy": {
+                "automatic_classification": "non_sensitive",
+                "risk_level": "low",
+                "release_basis": "automatic_policy",
+                "checks_passed": ["content_classification_pass"],
+            },
+        },
+    }
+
+    with patch.object(worker, "complete_item", return_value=True) as complete_item:
+        assert worker.process_item(item) is True
+
+    result_payload = complete_item.call_args.args[4]
+    assert result_payload["execution_duration_ms"] >= 0

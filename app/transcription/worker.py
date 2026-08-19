@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 import re
+import time
 from datetime import datetime, timezone
 
 
@@ -34,10 +35,13 @@ class PipelineWorker(QThread):
         self.duration_seconds = int(duration_seconds)
 
     def run(self) -> None:
+        pipeline_started = time.monotonic()
+        stage_timings: dict[str, float] = {}
         try:
             # 1. Transcribe audio file using Whisper
             # Since WhisperTranscriber.transcribe is asynchronous, we run it using asyncio.run in this thread
             self.state_changed.emit("TRANSCRIBING")
+            transcription_started = time.monotonic()
             bin_path = self.settings_manager.get("whisper_bin_path")
             model_path = self.settings_manager.get("whisper_model_path")
             
@@ -59,37 +63,47 @@ class PipelineWorker(QThread):
             transcript = transcript.strip()
             if transcript:
                 transcript = transcript[0].upper() + transcript[1:]
+            stage_timings["transcription_seconds"] = time.monotonic() - transcription_started
                 
             # 2. Classify transcript locally using Ollama
             self.state_changed.emit("CLASSIFYING")
             ollama_url = self.settings_manager.get("ollama_url")
             fast_model = self.settings_manager.get("fast_model", "qwen3.5:latest")
-            classifier = OllamaClassifier(ollama_url, fast_model)
+            fallback_model = self.settings_manager.get("fallback_model", "phi4-mini:3.8b")
+            total_budget_seconds = self.settings_manager.get(
+                "classification_total_budget_seconds", 18.0
+            )
+            classifier = OllamaClassifier(
+                ollama_url,
+                fast_model,
+                fallback_model=fallback_model,
+                total_budget_seconds=float(total_budget_seconds),
+            )
             
             recorded_at = datetime.now().isoformat()
+            classification_started = time.monotonic()
             classification = classifier.classify(transcript, recorded_at, self.duration_seconds)
-            
-            confidence = classification.get("confidence", 0.5)
+            stage_timings["classification_seconds"] = time.monotonic() - classification_started
+
             sensitivity = classification.get("sensitivity", "unknown")
-            
-            # Two-pass classification if low confidence or unknown sensitivity
-            if confidence < 0.75 or sensitivity == "unknown":
-                log_audit_event("CLASSIFICATION_RETRY", "session", "Low confidence or unknown sensitivity. Using careful model.")
-                careful_model = self.settings_manager.get("careful_model", "phi4:14b")
-                careful_classifier = OllamaClassifier(ollama_url, careful_model)
-                classification = careful_classifier.classify(transcript, recorded_at, self.duration_seconds)
-                sensitivity = classification.get("sensitivity", "unknown")
-            
             category = classification.get("category", "general_note")
-            
+
             # 3. Check privacy safety rules using the Policy Gate
+            routing_started = time.monotonic()
             self.state_changed.emit("POLICY_CHECKING")
             gate = PolicyGate()
-            telegram_allowed = gate.is_telegram_allowed(sensitivity, category, transcript)
+            requires_review = bool(classification.get("requires_review", False))
+            telegram_allowed = (
+                bool(classification.get("telegram_allowed", False))
+                and not requires_review
+                and gate.is_telegram_allowed(sensitivity, category, transcript)
+            )
             classification["telegram_allowed"] = telegram_allowed
             
             if telegram_allowed:
                 classification["route"] = "telegram_agent_task"
+            elif requires_review:
+                classification["route"] = "review_queue"
             else:
                 classification["route"] = f"local_{category}"
             
@@ -136,6 +150,22 @@ class PipelineWorker(QThread):
                 note_path=note_path,
                 recorded_at=datetime.now(timezone.utc).isoformat(),
                 duration_seconds=self.duration_seconds,
+            )
+
+            stage_timings["routing_seconds"] = time.monotonic() - routing_started
+            stage_timings["pipeline_to_submission_seconds"] = (
+                time.monotonic() - pipeline_started
+            )
+            log_audit_event(
+                "PIPELINE_TIMINGS",
+                "session",
+                json.dumps(
+                    {
+                        **{key: round(value, 3) for key, value in stage_timings.items()},
+                        "execution_timing": "remote_not_observed",
+                    },
+                    sort_keys=True,
+                ),
             )
             
             # 6. Copy WAV file to Obsidian Vault Audio directory and clean up temporary audio file
