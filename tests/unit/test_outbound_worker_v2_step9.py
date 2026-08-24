@@ -114,7 +114,12 @@ def test_agent_task_routing_and_idempotency_headers(base_worker_env: None, temp_
 
         mock_post_resp = MagicMock()
         mock_post_resp.status_code = 200
-        mock_post_resp.json.return_value = {"output": "Summary result text"}
+        mock_post_resp.json.return_value = {
+            "output": (
+                "ACTION_COMPLETED: receipt_type=openclaw_result; "
+                "receipt_id=SUMMARY_RESULT_200"
+            )
+        }
         mock_post.return_value = mock_post_resp
 
         mock_rpc.return_value = (200, {"completed": True})

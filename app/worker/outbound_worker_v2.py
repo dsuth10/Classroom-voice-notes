@@ -374,7 +374,16 @@ class OutboundWorkerV2:
                 req = adapter.convert_task(payload)
                 raw_res = adapter.execute(req)
                 validated_res = adapter.validate_response(raw_res)
-                return True, f"openclaw_res_{item_id[:8]}", validated_res
+                if validated_res.get("status") == "blocked":
+                    reason_code = str(validated_res.get("reason_code") or "ACTION_BLOCKED")
+                    return False, f"PERMANENT_ACTION_BLOCKED:{reason_code}", validated_res
+                if validated_res.get("status") == "unknown":
+                    reason_code = str(validated_res.get("reason_code") or "ACTION_UNKNOWN")
+                    return False, f"EXECUTION_OUTCOME_UNKNOWN:{reason_code}", validated_res
+                result_reference = validated_res.get("result_reference")
+                if not result_reference:
+                    return False, "PERMANENT_MISSING_SAFE_RECEIPT", validated_res
+                return True, str(result_reference), validated_res
             except (GatewayAuthenticationError, GatewayConfigurationError) as gw_fatal:
                 logger.error(f"FATAL_GATEWAY_ERROR: OpenClaw credential or endpoint configuration failure for item {item_id}: {gw_fatal}")
                 raise FatalWorkerError(f"OpenClaw gateway configuration/auth failure: {gw_fatal}") from gw_fatal
@@ -455,7 +464,7 @@ class OutboundWorkerV2:
                 return False
 
         # 5. Journal recovery check
-        result_payload = {
+        result_payload: Dict[str, Any] = {
             "status": "delivered",
             "processed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "worker_id": self.worker_id,

@@ -34,7 +34,7 @@ class TestOpenClawStaging(unittest.TestCase):
             "target_agent": "openclaw",
             "task": {
                 "title": "Staging Live Echo Check",
-                "instructions": '{"task_type": "cvn.test", "payload": {"test_mode": "echo", "text": "Return exactly: CVN adapter connection successful."}}'
+                "instructions": '{"task_type": "cvn.test", "payload": {"test_mode": "echo", "text": "Return exactly: CVN_OPENCLAW_STAGING_OK"}}'
             }
         }
 
@@ -43,5 +43,8 @@ class TestOpenClawStaging(unittest.TestCase):
         response = self.adapter.execute(request, 120)
         result = self.adapter.validate_response(response)
 
-        self.assertIn("CVN adapter connection successful", result["result_summary"])
-        print("[+] Live gateway execution successful. Output:", result["result_summary"])
+        self.assertEqual(
+            result["result_reference"],
+            "openclaw_result:CVN_OPENCLAW_STAGING_OK",
+        )
+        print("[+] Live gateway execution returned a safe receipt.")

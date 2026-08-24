@@ -95,5 +95,49 @@ def test_outbox_dialog_archives_only_selected_dead_letter(
 
         assert outbox.get_stats()["archived"] == 1
         assert outbox.get_stats()["dead_letter"] == 0
-        assert dialog.table.rowCount() == 0
+        assert dialog.table.rowCount() == 1
+        assert dialog.table.item(0, 2).text() == "Blocked"
+        assert dialog.table.item(0, 8).text() == "archived"
+        dialog.close()
+
+
+def test_outbox_dialog_shows_completed_safe_receipt(
+    qapp: QApplication,
+    tmp_path: Path,
+) -> None:
+    outbox = ExternalOutbox(tmp_path / "completed.db")
+    local_id = outbox.enqueue(
+        task_id="CVN-RECEIPT",
+        endpoint_url=(
+            "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/"
+            "cvn-submit-outbound-item"
+        ),
+        payload_json="{}",
+        payload_hash="hash",
+        idempotency_key="idem-receipt",
+        nonce="nonce-receipt",
+        schema_version="cvn.outbound_item.v2",
+        target_agent="openclaw",
+    )
+    outbox.mark_sent(local_id, "broker-id")
+    outbox.apply_remote_lifecycle(
+        "CVN-RECEIPT",
+        {
+            "item_id": "CVN-RECEIPT",
+            "status": "completed",
+            "created_at": "2026-08-24T08:00:00+00:00",
+            "claimed_at": "2026-08-24T08:00:01+00:00",
+            "completed_at": "2026-08-24T08:00:02+00:00",
+            "result_reference": "agentmail_message_id:msg_visible_123",
+        },
+    )
+
+    with mock.patch("app.ui.outbox_dialog.ExternalOutbox", return_value=outbox):
+        dialog = OutboxDialog()
+        assert dialog.table.rowCount() == 1
+        assert dialog.table.item(0, 2).text() == "Completed"
+        assert dialog.table.item(0, 4).text() == "2026-08-24T08:00:01+00:00"
+        assert dialog.table.item(0, 6).text() == (
+            "agentmail_message_id:msg_visible_123"
+        )
         dialog.close()

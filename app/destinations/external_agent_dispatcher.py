@@ -14,6 +14,7 @@ from app.destinations.payload_builder import build_payload
 from app.destinations.hmac_signer import sign
 from app.ollama_router.policy_gate import PolicyGate
 from app.audit.audit_logger import log_audit_event
+from app.destinations.outbound_lifecycle import project_lifecycle_to_note
 
 class ExternalAgentDispatcher:
     def __init__(self, settings_manager: SettingsManager, outbox: Optional[ExternalOutbox] = None) -> None:
@@ -172,23 +173,16 @@ class ExternalAgentDispatcher:
                 resp_json = response.json()
                 remote_msg_id = resp_json.get("msg_id") or resp_json.get("task_id")
                 self.outbox.mark_sent(local_id, remote_msg_id)
-                self._update_note_frontmatter(Path(note_path), {
-                    "status": "sent",
-                    "task_id": payload["task_id"],
-                    "agent_target": target_agent,
-                    "submitted_at": datetime.now().astimezone().isoformat()
-                })
-                self._update_note_result_block(
-                    file_path=Path(note_path),
-                    status="sent",
-                    agent=target_agent,
-                    task_id=payload["task_id"],
-                    timestamp_str=datetime.now().astimezone().isoformat(),
-                    result_summary="Task submitted to broker."
+                submitted_row = self.outbox.get_by_task_id(payload["task_id"]) or {}
+                project_lifecycle_to_note(
+                    note_path,
+                    item_id=payload["task_id"],
+                    state="submitted",
+                    submitted_at=submitted_row.get("submitted_at"),
                 )
                 return True
             elif response.status_code == 409:
-                self.outbox.mark_duplicate(local_id, response.text)
+                self.outbox.mark_duplicate(local_id, "SUBMISSION_CONFLICT")
                 self._update_note_frontmatter(Path(note_path), {"status": "dispatch_failed"})
                 self._update_note_result_block(
                     file_path=Path(note_path),
@@ -196,17 +190,16 @@ class ExternalAgentDispatcher:
                     agent=target_agent,
                     task_id=payload["task_id"],
                     timestamp_str=datetime.now().astimezone().isoformat(),
-                    result_summary=f"Submission failed due to server 409 conflict: {response.text}"
+                    result_summary="SUBMISSION_CONFLICT"
                 )
                 return False
             else:
-                error_msg = f"HTTP {response.status_code}: {response.text}"
+                error_msg = f"HTTP_{response.status_code}"
                 self.outbox.mark_failed(local_id, error_msg)
                 self._update_note_frontmatter(Path(note_path), {"status": "dispatch_failed"})
                 return False
-        except Exception as e:
-            error_msg = str(e)
-            self.outbox.mark_failed(local_id, error_msg)
+        except Exception:
+            self.outbox.mark_failed(local_id, "NETWORK_REQUEST_FAILED")
             self._update_note_frontmatter(Path(note_path), {"status": "dispatch_failed"})
             return False
 
@@ -292,13 +285,22 @@ class ExternalAgentDispatcher:
                     resp_json = response.json()
                     remote_msg_id = resp_json.get("msg_id") or resp_json.get("task_id")
                     self.outbox.mark_sent(local_id, remote_msg_id)
+                    submitted_row = self.outbox.get_by_task_id(task["task_id"]) or {}
+                    note_path = task.get("note_path")
+                    if note_path:
+                        project_lifecycle_to_note(
+                            note_path,
+                            item_id=task["task_id"],
+                            state="submitted",
+                            submitted_at=submitted_row.get("submitted_at"),
+                        )
                     sent_count += 1
                 elif response.status_code == 409:
-                    self.outbox.mark_duplicate(local_id, response.text)
+                    self.outbox.mark_duplicate(local_id, "SUBMISSION_CONFLICT")
                 else:
-                    self.outbox.mark_failed(local_id, f"HTTP {response.status_code}: {response.text}")
-            except Exception as e:
-                self.outbox.mark_failed(local_id, str(e))
+                    self.outbox.mark_failed(local_id, f"HTTP_{response.status_code}")
+            except Exception:
+                self.outbox.mark_failed(local_id, "NETWORK_REQUEST_FAILED")
                 
         return sent_count
 
@@ -447,7 +449,7 @@ class ExternalAgentDispatcher:
             log_audit_event("MD_RESULT_BLOCK_UPDATE_ERROR", "dispatcher", f"Failed to update note result block: {e}")
 
     def check_task_status(self, endpoint_url: str, task_id: str) -> Optional[Dict[str, Any]]:
-        """Queries the cvn-status endpoint for a task, returning its status JSON."""
+        """Query the canonical v2 status endpoint with desktop client credentials."""
         try:
             from app.config.environment import validate_broker_endpoint
             validate_broker_endpoint(endpoint_url)
@@ -459,7 +461,6 @@ class ExternalAgentDispatcher:
             )
             return None
 
-        # Retrieve keys
         try:
             from app.config.environment import get_env_credential_ref
             hmac_ref = get_env_credential_ref("hmac_secret")
@@ -475,34 +476,61 @@ class ExternalAgentDispatcher:
             log_audit_event("STATUS_CHECK_ERROR", "dispatcher", "Credentials missing from keyring. Status check aborted.")
             return None
 
-        # Build url: extract base url up to functions/v1
+        if endpoint_url.rstrip("/").endswith("/cvn-submit-task"):
+            return self._check_legacy_task_status(
+                endpoint_url,
+                task_id,
+                hmac_secret=hmac_secret,
+                bearer_token=bearer_token,
+            )
+
         base_match = re.match(r"(https://[^/]+/functions/v1)", endpoint_url)
         if not base_match:
             log_audit_event("STATUS_CHECK_ERROR", "dispatcher", f"Malformed endpoint URL: {endpoint_url}")
             return None
-        
-        status_url = f"{base_match.group(1)}/cvn-status/{task_id}"
 
-        import secrets
-        now = datetime.now(timezone.utc)
-        signed_at_str = now.isoformat()
-        nonce = secrets.token_hex(16)
+        status_url = f"{base_match.group(1)}/cvn-outbound-status"
+        try:
+            from app.config.environment import validate_broker_endpoint
+            validate_broker_endpoint(status_url)
+        except RuntimeError:
+            return None
 
-        # Canonical string: GET\n/functions/v1/cvn-status/<task_id>\ntask_id=<task_id>\nsigned_at=<signed_at>\nnonce=<nonce>
-        canonical = f"GET\n/functions/v1/cvn-status/{task_id}\ntask_id={task_id}\nsigned_at={signed_at_str}\nnonce={nonce}"
-        sig = sign(canonical.encode("utf-8"), hmac_secret)
+        source_device_id = str(
+            self.settings_manager.get("external_agent.source_device_id") or ""
+        )
+        if not source_device_id:
+            log_audit_event(
+                "STATUS_CHECK_ERROR",
+                "dispatcher",
+                f"Status check for task {task_id} has no source device identity.",
+            )
+            return None
+
+        body = json.dumps(
+            {"item_id": task_id, "source_device_id": source_device_id},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        from app.destinations.hmac_signer import create_client_request_headers
+
+        client_key_id = self.settings_manager.get(
+            "external_agent.client_key_id"
+        ) or os.environ.get("CVN_CLIENT_KEY_ID", "default_client_key")
+        headers = create_client_request_headers(
+            method="POST",
+            endpoint_url=status_url,
+            raw_body_str=body,
+            bearer_token=bearer_token,
+            hmac_secret=hmac_secret,
+            client_key_id=client_key_id,
+        )
 
         try:
-            response = httpx.get(
+            response = httpx.post(
                 status_url,
-                params={
-                    "signed_at": signed_at_str,
-                    "nonce": nonce
-                },
-                headers={
-                    "Authorization": f"Bearer {bearer_token}",
-                    "x-cvn-signature": sig
-                },
+                content=body,
+                headers=headers,
                 timeout=10.0
             )
 
@@ -510,17 +538,87 @@ class ExternalAgentDispatcher:
                 data = response.json()
                 if isinstance(data, dict):
                     return data
-                return {"result": str(data)}
-
-            elif response.status_code == 404:
+                return None
+            if response.status_code == 404:
                 log_audit_event("STATUS_CHECK_NOT_FOUND", "dispatcher", f"Task {task_id} not found on broker")
                 return {"status": "not_found"}
-            else:
-                log_audit_event("STATUS_CHECK_FAILED", "dispatcher", f"Failed to get status for {task_id}: HTTP {response.status_code}")
-                return None
-        except Exception as e:
-            log_audit_event("STATUS_CHECK_ERROR", "dispatcher", f"HTTP request failed for task {task_id}: {e}")
+            log_audit_event("STATUS_CHECK_FAILED", "dispatcher", f"Failed to get status for {task_id}: HTTP {response.status_code}")
             return None
+        except Exception:
+            log_audit_event(
+                "STATUS_CHECK_ERROR",
+                "dispatcher",
+                f"Status request failed for task {task_id}.",
+            )
+            return None
+
+    def _check_legacy_task_status(
+        self,
+        endpoint_url: str,
+        task_id: str,
+        *,
+        hmac_secret: str,
+        bearer_token: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Read legacy v1 status while discarding free-form result content."""
+        base_match = re.match(r"(https://[^/]+/functions/v1)", endpoint_url)
+        if not base_match:
+            return None
+        status_url = f"{base_match.group(1)}/cvn-status/{task_id}"
+
+        import secrets
+
+        signed_at = datetime.now(timezone.utc).isoformat()
+        nonce = secrets.token_hex(16)
+        canonical = (
+            f"GET\n/functions/v1/cvn-status/{task_id}\n"
+            f"task_id={task_id}\nsigned_at={signed_at}\nnonce={nonce}"
+        )
+        signature = sign(canonical.encode("utf-8"), hmac_secret)
+        try:
+            response = httpx.get(
+                status_url,
+                params={"signed_at": signed_at, "nonce": nonce},
+                headers={
+                    "Authorization": f"Bearer {bearer_token}",
+                    "x-cvn-signature": signature,
+                },
+                timeout=10.0,
+            )
+        except Exception:
+            return None
+        if response.status_code == 404:
+            return {"status": "not_found"}
+        if response.status_code != 200:
+            return None
+        data = response.json()
+        if not isinstance(data, dict):
+            return None
+
+        from app.destinations.outbound_lifecycle import (
+            sanitise_reason_code,
+            sanitise_result_reference,
+            sanitise_timestamp,
+        )
+
+        result_reference = sanitise_result_reference(
+            data.get("result_reference") or data.get("result_summary")
+        )
+        return {
+            "found": True,
+            "item_id": task_id,
+            "status": data.get("status"),
+            "created_at": sanitise_timestamp(data.get("created_at")),
+            "claimed_at": sanitise_timestamp(data.get("claimed_at")),
+            "completed_at": sanitise_timestamp(data.get("completed_at")),
+            "failed_at": sanitise_timestamp(data.get("failed_at")),
+            "result_reference": result_reference,
+            "blocked_reason": (
+                sanitise_reason_code(data.get("error_code"))
+                if data.get("error_code")
+                else None
+            ),
+        }
 
     def reconcile_statuses(
         self,
@@ -535,72 +633,44 @@ class ExternalAgentDispatcher:
         for task in tasks:
             if should_stop and should_stop():
                 break
-            local_id = task["local_id"]
             task_id = task["task_id"]
             endpoint_url = task["endpoint_url"]
             note_path = task.get("note_path")
-            target_agent = task.get("target_agent")
-            if not target_agent:
-                try:
-                    target_agent = json.loads(task["payload_json"]).get("target_agent")
-                except (json.JSONDecodeError, TypeError):
-                    target_agent = None
-            if target_agent not in ("hermes", "openclaw"):
-                target_agent = "openclaw"
-
             status_data = self.check_task_status(endpoint_url, task_id)
             if not status_data:
                 continue
 
-            remote_status = status_data.get("status")
-            if not remote_status:
+            try:
+                before_state = task.get("lifecycle_state")
+                before_receipt = task.get("safe_receipt")
+                updated = self.outbox.apply_remote_lifecycle(task_id, status_data)
+            except ValueError:
+                log_audit_event(
+                    "OUTBOUND_STATUS_IDENTITY_CONFLICT",
+                    "dispatcher",
+                    f"Rejected mismatched status response for task {task_id}.",
+                )
+                continue
+            if not updated or not updated.get("lifecycle_state"):
                 continue
 
-            # Mapping remote broker status to local status
-            local_status = None
-            if remote_status == "completed":
-                local_status = "completed"
-            elif remote_status in ("failed", "cancelled", "dead_letter", "manual_review"):
-                local_status = "failed"
-            elif remote_status in ("claimed", "running"):
-                local_status = "processing"
-            elif remote_status == "pending":
-                local_status = "sent"
+            if note_path:
+                project_lifecycle_to_note(
+                    note_path,
+                    item_id=task_id,
+                    state=str(updated["lifecycle_state"]),
+                    submitted_at=updated.get("submitted_at"),
+                    claimed_at=updated.get("claimed_at"),
+                    completed_at=updated.get("completed_at"),
+                    blocked_at=updated.get("blocked_at"),
+                    safe_receipt=updated.get("safe_receipt"),
+                    blocked_reason=updated.get("blocked_reason"),
+                )
 
-            if local_status and local_status != task["status"]:
-                # Update outbox record
-                error_msg = status_data.get("error_message") or status_data.get("error_code")
-                self.outbox.update_task_status(local_id, local_status, error_msg)
-                
-                # Update corresponding Obsidian note if note_path is provided
-                if note_path:
-                    note_file = Path(note_path)
-                    if note_file.exists():
-                        frontmatter_updates = {
-                            "status": local_status,
-                            "last_status_check_at": datetime.now().astimezone().isoformat(),
-                            "result_summary": status_data.get("result_summary") or "",
-                            "error_code": status_data.get("error_code") or ""
-                        }
-                        if local_status == "completed":
-                            frontmatter_updates["completed_at"] = status_data.get("completed_at") or datetime.now().astimezone().isoformat()
-                        elif local_status == "failed":
-                            frontmatter_updates["failed_at"] = status_data.get("failed_at") or datetime.now().astimezone().isoformat()
-
-                        self._update_note_frontmatter(note_file, frontmatter_updates)
-                        
-                        # Update note body result block
-                        completed_time = status_data.get("completed_at") or status_data.get("failed_at") or datetime.now().astimezone().isoformat()
-                        result_text = status_data.get("result_summary") or status_data.get("error_message") or "Task executed."
-                        self._update_note_result_block(
-                            file_path=note_file,
-                            status=local_status,
-                            agent=target_agent,
-                            task_id=task_id,
-                            timestamp_str=completed_time,
-                            result_summary=result_text
-                        )
-                
+            if (
+                updated.get("lifecycle_state") != before_state
+                or updated.get("safe_receipt") != before_receipt
+            ):
                 updated_count += 1
                 
         return updated_count

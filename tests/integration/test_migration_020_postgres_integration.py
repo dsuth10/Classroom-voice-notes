@@ -168,7 +168,7 @@ def test_migration_020_submit_exact_idempotency_and_conflict() -> None:
 
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for live staging tests")
 def test_migration_020_claim_complete_lifecycle_and_ownership_cleanup() -> None:
-    """Claiming an item returns a plaintext lease; completing clears ALL lease ownership fields in DB."""
+    """Completion clears lease ownership but preserves historical claimed_at."""
     worker_id = "test-worker-020-" + secrets.token_hex(4)
     item_id = f"CVNI-{time.strftime('%Y%m%d')}-120000-{secrets.token_hex(2).upper()}"
     source_device = "test-device-" + secrets.token_hex(4)
@@ -225,6 +225,8 @@ def test_migration_020_claim_complete_lifecycle_and_ownership_cleanup() -> None:
     claimed_data = _claim_specific_item(worker_id, item_id)
     assert claimed_data["item_id"] == item_id
     lease_token = claimed_data["lease_token"]
+    claimed_timestamp = _query_item(item_id)["claimed_at"]
+    assert claimed_timestamp is not None
 
     # Complete item with valid lease token
     comp_res = _rpc("cvn_complete_outbound_item", {
@@ -234,14 +236,14 @@ def test_migration_020_claim_complete_lifecycle_and_ownership_cleanup() -> None:
         "p_payload_hash": payload_hash,
         "p_content_hash": content_hash,
         "p_result_json": {"status": "success"},
-        "p_result_reference": "ref-12345",
+        "p_result_reference": "openclaw_result:ref-12345",
     })
     assert comp_res.status_code == 200
     comp_data = comp_res.json()
     assert comp_data.get("success") is True
     assert comp_data.get("status") == "completed"
 
-    # Query DB row directly to verify ALL lease ownership fields are NULL
+    # Lease ownership clears while claimed_at remains durable lifecycle evidence.
     row = _query_item(item_id)
     assert row["status"] == "completed"
     assert row["lease_token"] is None
@@ -250,8 +252,8 @@ def test_migration_020_claim_complete_lifecycle_and_ownership_cleanup() -> None:
     assert row["visibility_deadline"] is None
     assert row["claimed_by"] is None
     assert row["claimed_by_worker_id"] is None
-    assert row["claimed_at"] is None
-    assert row["result_reference"] == "ref-12345"
+    assert row["claimed_at"] == claimed_timestamp
+    assert row["result_reference"] == "openclaw_result:ref-12345"
 
 
 @pytest.mark.skipif(MISSING_ENV, reason="Missing environment variables for live staging tests")
@@ -484,4 +486,4 @@ def test_migration_020_server_controlled_3_attempt_dead_letter() -> None:
     assert row["visibility_deadline"] is None
     assert row["claimed_by"] is None
     assert row["claimed_by_worker_id"] is None
-    assert row["claimed_at"] is None
+    assert row["claimed_at"] is not None

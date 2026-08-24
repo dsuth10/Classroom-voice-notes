@@ -314,8 +314,25 @@ class BrokerWorker:
             self.fail_task(task_id, str(e), "UNEXPECTED_VALIDATION_ERROR", "permanent")
             return
 
-        # 6. Complete task
-        self.complete_task(task_id, sanitised_result["result_summary"])
+        # 6. Complete or block using lifecycle-safe identifiers only.
+        outcome_state = sanitised_result.get("status")
+        if outcome_state == "completed" and sanitised_result.get("result_reference"):
+            self.complete_task(task_id, str(sanitised_result["result_reference"]))
+            return
+        if outcome_state == "blocked":
+            self.fail_task(
+                task_id,
+                str(sanitised_result.get("reason_code") or "ACTION_BLOCKED"),
+                "ACTION_BLOCKED",
+                "permanent",
+            )
+            return
+        self.fail_task(
+            task_id,
+            str(sanitised_result.get("reason_code") or "ACTION_UNKNOWN"),
+            "ACTION_UNKNOWN",
+            "execution_unknown",
+        )
 
     def poll_and_process(self) -> None:
         urls = self.resolve_urls()

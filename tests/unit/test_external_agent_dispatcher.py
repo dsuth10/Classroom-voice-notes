@@ -75,10 +75,11 @@ def test_dispatcher_dispatch_success(
     unfinished = mock_outbox.get_unfinished_tasks()
     assert unfinished[0]["target_agent"] == "hermes"
     
-    # Check frontmatter was updated to sent
+    # Check the note shows the lifecycle state without task content telemetry.
     note_content = note_file.read_text(encoding="utf-8")
-    assert "status: sent" in note_content
-    assert "agent_target: hermes" in note_content
+    assert 'external_state: "Submitted"' in note_content
+    assert "## Outbound lifecycle" in note_content
+    assert "Clean desks transcript" not in note_content
 
 @patch("app.config.keyring_store.get_secret")
 def test_dispatcher_dispatch_disabled(
@@ -255,6 +256,72 @@ def test_retry_pending_applies_retention_before_transmission(
     mock_keyring.assert_not_called()
 
 
+@patch.dict(os.environ, {"CVN_BROKER_ENV": "staging"})
+@patch("app.config.keyring_store.get_secret", return_value="status-secret")
+@patch("app.destinations.external_agent_dispatcher.httpx.post")
+def test_status_check_uses_signed_client_scoped_v2_endpoint(
+    mock_post: MagicMock,
+    _mock_keyring: MagicMock,
+    mock_settings: MagicMock,
+    mock_outbox: ExternalOutbox,
+) -> None:
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "found": True,
+        "item_id": "CVNI-STATUS",
+        "status": "claimed",
+    }
+    mock_post.return_value = response
+    dispatcher = ExternalAgentDispatcher(mock_settings, mock_outbox)
+
+    result = dispatcher.check_task_status(
+        "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/"
+        "cvn-submit-outbound-item",
+        "CVNI-STATUS",
+    )
+
+    assert result == response.json.return_value
+    request = mock_post.call_args
+    assert request.args[0].endswith("/cvn-outbound-status")
+    assert request.kwargs["headers"]["X-CVN-Client-Key-Id"] == "default_client_key"
+    body = json.loads(request.kwargs["content"])
+    assert body == {
+        "item_id": "CVNI-STATUS",
+        "source_device_id": "test-device-001",
+    }
+
+
+@patch.dict(os.environ, {"CVN_BROKER_ENV": "staging"})
+@patch("app.config.keyring_store.get_secret", return_value="status-secret")
+@patch("app.destinations.external_agent_dispatcher.httpx.get")
+def test_legacy_status_discards_free_form_result_content(
+    mock_get: MagicMock,
+    _mock_keyring: MagicMock,
+    mock_settings: MagicMock,
+    mock_outbox: ExternalOutbox,
+) -> None:
+    response = MagicMock()
+    response.status_code = 200
+    response.json.return_value = {
+        "status": "completed",
+        "completed_at": "2026-08-24T08:00:00+00:00",
+        "result_summary": "Email body and teacher@example.com must not escape",
+    }
+    mock_get.return_value = response
+    dispatcher = ExternalAgentDispatcher(mock_settings, mock_outbox)
+
+    result = dispatcher.check_task_status(
+        "https://ukqkkgzimhtjhlnmlyao.supabase.co/functions/v1/cvn-submit-task",
+        "CVN-LEGACY-STATUS",
+    )
+
+    assert result is not None
+    assert result["result_reference"] is None
+    assert "result_summary" not in result
+    assert "teacher@example.com" not in str(result)
+
+
 @pytest.mark.parametrize(
     ("target_agent", "persist_target"),
     [("hermes", True), ("openclaw", False)],
@@ -291,15 +358,21 @@ def test_reconcile_status_preserves_authoritative_target_agent(
         dispatcher,
         "check_task_status",
         return_value={
+            "found": True,
+            "item_id": f"CVN-{target_agent.upper()}",
             "status": "completed",
+            "created_at": "2026-07-25T11:58:00+10:00",
+            "claimed_at": "2026-07-25T11:59:00+10:00",
             "completed_at": "2026-07-25T12:00:00+10:00",
-            "result_summary": "Synthetic result",
+            "result_reference": "agentmail_message_id:msg_safe_123",
+            "result_summary": "Synthetic result that must not be projected",
         },
     ):
         assert dispatcher.reconcile_statuses() == 1
 
     note_content = note_file.read_text(encoding="utf-8")
-    assert f"- **Agent:** {target_agent.capitalize()}" in note_content
-    assert "status: completed" in note_content
-    assert "Synthetic result" in note_content
+    assert 'external_state: "Completed"' in note_content
+    assert "- **Claimed:** 2026-07-25T11:59:00+10:00" in note_content
+    assert "agentmail_message_id:msg_safe_123" in note_content
+    assert "Synthetic result" not in note_content
     assert mock_outbox.get_stats()["completed"] == 1

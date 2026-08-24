@@ -4,6 +4,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from app.utils.paths import get_app_data_dir
 from app.audit.audit_logger import log_audit_event
+from app.destinations.outbound_lifecycle import (
+    LIFECYCLE_STATES,
+    TERMINAL_LIFECYCLE_STATES,
+    sanitise_reason_code,
+    sanitise_result_reference,
+    sanitise_timestamp,
+)
 
 class ExternalOutbox:
     def __init__(self, db_path: Optional[Path] = None) -> None:
@@ -87,6 +94,24 @@ class ExternalOutbox:
                 conn.commit()
             except sqlite3.OperationalError:
                 pass
+            lifecycle_columns = [
+                ("lifecycle_state", "TEXT"),
+                ("submitted_at", "TEXT"),
+                ("claimed_at", "TEXT"),
+                ("completed_at", "TEXT"),
+                ("blocked_at", "TEXT"),
+                ("safe_receipt", "TEXT"),
+                ("blocked_reason", "TEXT"),
+                ("last_status_check_at", "TEXT"),
+            ]
+            existing_columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(outbox)").fetchall()
+            }
+            for column_name, column_type in lifecycle_columns:
+                if column_name not in existing_columns:
+                    conn.execute(
+                        f"ALTER TABLE outbox ADD COLUMN {column_name} {column_type}"
+                    )
             conn.commit()
 
     def enqueue(
@@ -206,7 +231,9 @@ class ExternalOutbox:
             cursor = conn.execute(
                 """
                 UPDATE outbox
-                SET status = 'pending', attempt_count = 0, last_error = NULL, next_retry_at = ?
+                SET status = 'pending', attempt_count = 0, last_error = NULL,
+                    next_retry_at = ?, lifecycle_state = NULL, blocked_at = NULL,
+                    blocked_reason = NULL
                 WHERE local_id = ? AND status = 'dead_letter'
                 """,
                 (now_str, local_id)
@@ -249,17 +276,19 @@ class ExternalOutbox:
             conn.commit()
 
     def mark_sent(self, local_id: int, remote_msg_id: Optional[str] = None) -> None:
-        """Marks a task as successfully sent to the remote broker."""
+        """Marks broker acceptance as the durable Submitted lifecycle state."""
         now_str = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 UPDATE outbox
                 SET status = 'sent', sent_at = ?, remote_msg_id = ?,
-                    last_error = NULL, next_retry_at = NULL
+                    last_error = NULL, next_retry_at = NULL,
+                    lifecycle_state = 'submitted',
+                    submitted_at = COALESCE(submitted_at, ?)
                 WHERE local_id = ?
                 """,
-                (now_str, remote_msg_id, local_id)
+                (now_str, remote_msg_id, now_str, local_id)
             )
             conn.commit()
             log_audit_event("OUTBOX_SENT_SUCCESS", "outbox", f"Task local_id={local_id} successfully marked as sent")
@@ -267,6 +296,7 @@ class ExternalOutbox:
     def mark_failed(self, local_id: int, error_msg: str, max_attempts: int = 5) -> None:
         """Handles a failed transmission attempt, calculating the next backoff time or dead-letter status."""
         now = datetime.now(timezone.utc)
+        safe_error = sanitise_reason_code(error_msg, default="LOCAL_DELIVERY_FAILED")
         
         # Read the current attempt count
         with sqlite3.connect(self.db_path) as conn:
@@ -285,7 +315,7 @@ class ExternalOutbox:
             log_audit_event(
                 "OUTBOX_DEAD_LETTER", 
                 "outbox", 
-                f"Task {task_id} reached max retries ({attempt_count}). Moved to dead_letter. Error: {error_msg}"
+                f"Task {task_id} reached max retries ({attempt_count}). Moved to dead_letter."
             )
         else:
             new_status = "pending"
@@ -297,36 +327,55 @@ class ExternalOutbox:
             log_audit_event(
                 "OUTBOX_RETRY_SCHEDULED", 
                 "outbox", 
-                f"Task {task_id} failed (attempt {attempt_count}). Retrying in {delay_seconds}s. Error: {error_msg}"
+                f"Task {task_id} failed (attempt {attempt_count}). Retrying in {delay_seconds}s."
             )
             
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                UPDATE outbox
-                SET status = ?, next_retry_at = ?, last_error = ?
-                WHERE local_id = ?
-                """,
-                (new_status, next_retry, error_msg, local_id)
-            )
+            if new_status == "dead_letter":
+                conn.execute(
+                    """
+                    UPDATE outbox
+                    SET status = ?, next_retry_at = ?, last_error = ?,
+                        lifecycle_state = 'blocked', blocked_at = ?,
+                        blocked_reason = 'LOCAL_DELIVERY_EXHAUSTED'
+                    WHERE local_id = ?
+                    """,
+                    (new_status, next_retry, safe_error, now.isoformat(), local_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE outbox
+                    SET status = ?, next_retry_at = ?, last_error = ?
+                    WHERE local_id = ?
+                    """,
+                    (new_status, next_retry, safe_error, local_id),
+                )
             conn.commit()
 
-    def mark_duplicate(self, local_id: int, error_type: str) -> None:
+    def mark_duplicate(self, local_id: int, _error_type: str) -> None:
         """Handles a 409 conflict response (e.g. idempotency conflict or nonce replay).
         
         Per Step 7 rules, 409 is a submission conflict, not a successful submission.
         """
+        now_str = datetime.now(timezone.utc).isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
                 UPDATE outbox
-                SET status = 'conflict', last_error = ?, next_retry_at = NULL
+                SET status = 'conflict', last_error = ?, next_retry_at = NULL,
+                    lifecycle_state = 'blocked', blocked_at = ?,
+                    blocked_reason = 'SUBMISSION_CONFLICT'
                 WHERE local_id = ?
                 """,
-                (f"Submission conflict (409): {error_type}", local_id)
+                ("SUBMISSION_CONFLICT", now_str, local_id)
             )
             conn.commit()
-            log_audit_event("OUTBOX_SUBMISSION_CONFLICT", "outbox", f"Task local_id={local_id} marked as conflict due to 409 ({error_type})")
+            log_audit_event(
+                "OUTBOX_SUBMISSION_CONFLICT",
+                "outbox",
+                f"Task local_id={local_id} marked as submission conflict.",
+            )
 
     def get_pending(self) -> List[Dict[str, Any]]:
         """Returns all outbox records that are currently 'pending' and due for retry."""
@@ -351,10 +400,12 @@ class ExternalOutbox:
             cursor.execute(
                 """
                 UPDATE outbox
-                SET status = 'dead_letter', last_error = 'Expired: exceeded retention period'
+                SET status = 'dead_letter', last_error = 'Expired: exceeded retention period',
+                    lifecycle_state = 'blocked', blocked_at = ?,
+                    blocked_reason = 'LOCAL_DELIVERY_EXPIRED'
                 WHERE status IN ('pending', 'sending') AND created_at <= ?
                 """,
-                (cutoff,)
+                (datetime.now(timezone.utc).isoformat(), cutoff)
             )
             conn.commit()
             count = cursor.rowcount
@@ -375,6 +426,140 @@ class ExternalOutbox:
             )
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_lifecycle_tasks(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Return lifecycle-only rows without payload content."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(
+                """
+                SELECT local_id, task_id, created_at, status, attempt_count,
+                       lifecycle_state,
+                       submitted_at, claimed_at, completed_at, blocked_at,
+                       safe_receipt, blocked_reason, last_status_check_at
+                FROM outbox
+                WHERE lifecycle_state IS NOT NULL OR status = 'dead_letter'
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_lifecycle_stats(self) -> Dict[str, int]:
+        stats = {state: 0 for state in LIFECYCLE_STATES}
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                SELECT lifecycle_state, COUNT(*)
+                FROM outbox
+                WHERE lifecycle_state IS NOT NULL
+                GROUP BY lifecycle_state
+                """
+            )
+            for state, count in cursor.fetchall():
+                if state in stats:
+                    stats[state] = int(count)
+        return stats
+
+    def apply_remote_lifecycle(
+        self, task_id: str, status_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Apply one authoritative status response monotonically and idempotently."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM outbox WHERE task_id = ?", (task_id,)
+            ).fetchone()
+        if row is None:
+            return None
+
+        current = dict(row)
+        remote_item_id = status_data.get("item_id")
+        if remote_item_id and str(remote_item_id) != task_id:
+            raise ValueError("ERR_STATUS_IDENTITY_CONFLICT")
+
+        remote_status = str(status_data.get("status") or "")
+        if remote_status in {"submitted", "received", "failed_retryable", "pending"}:
+            incoming_state = "submitted"
+            transport_status = "sent"
+        elif remote_status in {"claimed", "claiming", "processing", "running"}:
+            incoming_state = "claimed"
+            transport_status = "processing"
+        elif remote_status == "completed":
+            incoming_state = "completed"
+            transport_status = "completed"
+        elif remote_status in {
+            "failed",
+            "failed_permanent",
+            "dead_letter",
+            "expired",
+            "cancelled",
+            "manual_review",
+        }:
+            incoming_state = "blocked"
+            transport_status = "failed"
+        else:
+            return current
+
+        current_state = current.get("lifecycle_state")
+        if current_state in TERMINAL_LIFECYCLE_STATES and incoming_state != current_state:
+            return current
+        rank = {"submitted": 1, "claimed": 2, "completed": 3, "blocked": 3}
+        if current_state in rank and rank[incoming_state] < rank[current_state]:
+            incoming_state = str(current_state)
+            transport_status = str(current.get("status") or transport_status)
+
+        submitted_at = sanitise_timestamp(status_data.get("created_at"))
+        claimed_at = sanitise_timestamp(status_data.get("claimed_at"))
+        completed_at = sanitise_timestamp(status_data.get("completed_at"))
+        blocked_at = sanitise_timestamp(status_data.get("failed_at"))
+        receipt = sanitise_result_reference(status_data.get("result_reference"))
+        blocked_reason = None
+        if incoming_state == "blocked":
+            blocked_reason = sanitise_reason_code(
+                status_data.get("blocked_reason")
+                or status_data.get("last_error_code")
+                or status_data.get("failure_reason")
+                or remote_status.upper()
+            )
+
+        now_str = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET status = ?, lifecycle_state = ?,
+                    submitted_at = COALESCE(?, submitted_at, sent_at, created_at),
+                    claimed_at = COALESCE(?, claimed_at),
+                    completed_at = COALESCE(?, completed_at),
+                    blocked_at = COALESCE(?, blocked_at),
+                    safe_receipt = COALESCE(?, safe_receipt),
+                    blocked_reason = COALESCE(?, blocked_reason),
+                    last_status_check_at = ?
+                WHERE task_id = ?
+                """,
+                (
+                    transport_status,
+                    incoming_state,
+                    submitted_at,
+                    claimed_at,
+                    completed_at,
+                    blocked_at,
+                    receipt,
+                    blocked_reason,
+                    now_str,
+                    task_id,
+                ),
+            )
+            conn.commit()
+
+        log_audit_event(
+            "OUTBOUND_LIFECYCLE_RECONCILED",
+            "outbox",
+            f"Task {task_id} reconciled to {incoming_state}.",
+        )
+        return self.get_by_task_id(task_id)
+
     def update_task_status(
         self, 
         local_id: int, 
@@ -383,6 +568,11 @@ class ExternalOutbox:
         remote_msg_id: Optional[str] = None
     ) -> None:
         """Explicitly updates the status, last_error, and remote_msg_id of a task."""
+        safe_error = (
+            sanitise_reason_code(last_error, default="REMOTE_STATUS_FAILED")
+            if last_error
+            else None
+        )
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
                 """
@@ -390,7 +580,7 @@ class ExternalOutbox:
                 SET status = ?, last_error = ?, remote_msg_id = ?, next_retry_at = NULL
                 WHERE local_id = ?
                 """,
-                (status, last_error, remote_msg_id, local_id)
+                (status, safe_error, remote_msg_id, local_id)
             )
             conn.commit()
             log_audit_event("OUTBOX_STATUS_UPDATED", "outbox", f"Task local_id={local_id} updated to status={status}")

@@ -153,9 +153,9 @@ def test_main_window_refreshes_outbox_counts_after_worker_completion(
 ) -> None:
     settings_file = tmp_path / "settings.json"
     outbox = mock.MagicMock()
-    outbox.get_stats.side_effect = [
-        {"pending": 1, "sending": 0, "sent": 0, "completed": 0, "processing": 0, "dead_letter": 0},
-        {"pending": 0, "sending": 0, "sent": 1, "completed": 1, "processing": 0, "dead_letter": 2},
+    outbox.get_lifecycle_stats.side_effect = [
+        {"submitted": 1, "claimed": 0, "completed": 0, "blocked": 0},
+        {"submitted": 0, "claimed": 1, "completed": 2, "blocked": 2},
     ]
     controller = FakeController()
 
@@ -168,10 +168,14 @@ def test_main_window_refreshes_outbox_counts_after_worker_completion(
     ):
         manager = SettingsManager()
         window = MainWindow(manager, controller=controller)
-        assert window.outbox_status_label.text() == "Local Outbox: 1 pending, 0 sent, 0 stuck"
+        assert window.outbox_status_label.text() == (
+            "Outbound: 1 submitted, 0 claimed, 0 completed, 0 blocked"
+        )
 
         controller.outbox_processed.emit(1, 1)
         qapp.processEvents()
 
-        assert window.outbox_status_label.text() == "Local Outbox: 0 pending, 2 sent, 2 stuck"
+        assert window.outbox_status_label.text() == (
+            "Outbound: 0 submitted, 1 claimed, 2 completed, 2 blocked"
+        )
         window.close()

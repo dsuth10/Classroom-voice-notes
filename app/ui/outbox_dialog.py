@@ -9,8 +9,8 @@ from app.destinations.external_outbox import ExternalOutbox
 class OutboxDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Local Outbox Tasks (Stuck / Dead-Letter)")
-        self.resize(850, 400)
+        self.setWindowTitle("Outbound Lifecycle and Safe Receipts")
+        self.resize(1180, 480)
         self.outbox = ExternalOutbox()
         self.init_ui()
         self.refresh_tasks()
@@ -18,15 +18,26 @@ class OutboxDialog(QDialog):
     def init_ui(self) -> None:
         layout = QVBoxLayout(self)
 
-        self.info_label = QLabel("The following tasks are stuck in the local outbox (dead-letter queue):")
+        self.info_label = QLabel(
+            "Lifecycle metadata only: Submitted → Claimed → Completed or Blocked. "
+            "No transcript or message content is shown."
+        )
         layout.addWidget(self.info_label)
 
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(10)
         self.table.setHorizontalHeaderLabels([
-            "Local ID", "Task ID", "Created Time", "Status", 
-            "Attempt Count", "Last Error Summary", "Next Retry Time", "Sent Time"
+            "Local ID",
+            "Task ID",
+            "Lifecycle",
+            "Submitted",
+            "Claimed",
+            "Completed / Blocked",
+            "Safe receipt / reason",
+            "Attempts",
+            "Transport",
+            "Last status check",
         ])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -61,25 +72,28 @@ class OutboxDialog(QDialog):
         layout.addLayout(btn_layout)
 
     def refresh_tasks(self) -> None:
-        # Clear selection and retrieve dead_letter tasks
+        # Clear selection and retrieve privacy-safe lifecycle rows.
         self.table.setRowCount(0)
         self.retry_btn.setEnabled(False)
         self.archive_btn.setEnabled(False)
 
-        tasks = self.outbox.get_dead_letter_tasks(limit=100)
+        tasks = self.outbox.get_lifecycle_tasks(limit=100)
         self.table.setRowCount(len(tasks))
 
         for row_idx, task in enumerate(tasks):
-            # Column mapping
+            finished_at = task.get("completed_at") or task.get("blocked_at") or ""
+            receipt_or_reason = task.get("safe_receipt") or task.get("blocked_reason") or ""
             items = [
                 str(task["local_id"]),
                 str(task["task_id"]),
-                str(task["created_at"]),
-                str(task["status"]),
+                str(task.get("lifecycle_state") or "").capitalize(),
+                str(task.get("submitted_at") or ""),
+                str(task.get("claimed_at") or ""),
+                str(finished_at),
+                str(receipt_or_reason),
                 str(task["attempt_count"]),
-                str(task["last_error"] or ""),
-                str(task["next_retry_at"] or ""),
-                str(task["sent_at"] or "")
+                str(task["status"]),
+                str(task.get("last_status_check_at") or ""),
             ]
             for col_idx, text in enumerate(items):
                 item = QTableWidgetItem(text)
@@ -95,7 +109,7 @@ class OutboxDialog(QDialog):
             return
 
         row = selected_rows[0].row()
-        status_item = self.table.item(row, 3)
+        status_item = self.table.item(row, 8)
         status = status_item.text() if status_item else ""
 
         # Enable actions ONLY if status is dead_letter

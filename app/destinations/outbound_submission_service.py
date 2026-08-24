@@ -236,8 +236,21 @@ class OutboundSubmissionService:
         return count
 
     def reconcile_remote_statuses(self, broker_client: Optional[Any] = None) -> int:
-        """Reconciles queued local review items against remote Supabase status."""
-        import os
+        """Reconcile remote status through the signed desktop status client.
+
+        ``broker_client`` remains an explicit test seam. Runtime code never
+        loads a Supabase service-role key into the desktop process.
+        """
+
+        if broker_client is None:
+            from app.destinations.external_agent_dispatcher import (
+                ExternalAgentDispatcher,
+            )
+
+            dispatcher = ExternalAgentDispatcher(
+                self.settings_manager, outbox=self.outbox
+            )
+            return dispatcher.reconcile_statuses()
 
         count = 0
         with sqlite3.connect(self.review_store.db_path) as conn:
@@ -251,19 +264,6 @@ class OutboundSubmissionService:
             return 0
 
         client = broker_client
-        if client is None:
-            try:
-                from supabase import create_client  # type: ignore[attr-defined]
-
-                url = self.settings_manager.get("supabase.url", "") or os.environ.get("SUPABASE_URL", "")
-                key = self.settings_manager.get("supabase.service_role_key", "") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-                if url and key:
-                    client = create_client(url, key)
-            except Exception:
-                pass
-
-        if client is None:
-            return 0
 
         source_device_id = str(self.settings_manager.get("external_agent.source_device_id") or "")
         for item_id in queued_items:

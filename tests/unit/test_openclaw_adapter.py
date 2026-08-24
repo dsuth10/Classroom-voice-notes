@@ -169,14 +169,34 @@ class TestOpenClawAdapter(unittest.TestCase):
             self.adapter.execute(req, 120)
 
     def test_validate_response_success(self):
-        resp = {"output": "Final answer here."}
+        resp = {
+            "output": "ACTION_COMPLETED: receipt_type=agentmail_message_id; receipt_id=msg_123"
+        }
         validated = self.adapter.validate_response(resp)
-        self.assertEqual(validated["result_summary"], "Final answer here.")
+        self.assertEqual(validated["status"], "completed")
+        self.assertEqual(
+            validated["result_reference"], "agentmail_message_id:msg_123"
+        )
 
     def test_validate_response_choices_format(self):
-        resp = {"choices": [{"message": {"content": "Final choices answer."}}]}
+        resp = {
+            "choices": [
+                {
+                    "message": {
+                        "content": "ACTION_BLOCKED: reason_code=TOOL_UNAVAILABLE"
+                    }
+                }
+            ]
+        }
         validated = self.adapter.validate_response(resp)
-        self.assertEqual(validated["result_summary"], "Final choices answer.")
+        self.assertEqual(validated["status"], "blocked")
+        self.assertEqual(validated["reason_code"], "TOOL_UNAVAILABLE")
+
+    def test_validate_response_rejects_free_form_content(self):
+        with self.assertRaises(InvalidAgentResponse):
+            self.adapter.validate_response(
+                {"output": "Email sent. Body: sensitive classroom content"}
+            )
 
     def test_validate_response_oversized(self):
         resp = {"output": "A" * 20001}
@@ -195,7 +215,9 @@ class TestOpenClawAdapter(unittest.TestCase):
         # 1. Existing mock string response
         resp_string = {"output": "CVN_OPENCLAW_STAGING_OK"}
         res = self.adapter.validate_response(resp_string)
-        self.assertEqual(res["result_summary"], "CVN_OPENCLAW_STAGING_OK")
+        self.assertEqual(
+            res["result_reference"], "openclaw_result:CVN_OPENCLAW_STAGING_OK"
+        )
 
         # 2. One-message list response
         resp_one_msg = {
@@ -208,7 +230,9 @@ class TestOpenClawAdapter(unittest.TestCase):
             ]
         }
         res = self.adapter.validate_response(resp_one_msg)
-        self.assertEqual(res["result_summary"], "CVN_OPENCLAW_STAGING_OK")
+        self.assertEqual(
+            res["result_reference"], "openclaw_result:CVN_OPENCLAW_STAGING_OK"
+        )
 
         # 3. Multi-message list response
         resp_multi_msg = {
@@ -225,8 +249,8 @@ class TestOpenClawAdapter(unittest.TestCase):
                 }
             ]
         }
-        res = self.adapter.validate_response(resp_multi_msg)
-        self.assertEqual(res["result_summary"], "CVN_OPENCLAW_STAGING_OK\nExtra chunk")
+        with self.assertRaises(InvalidAgentResponse):
+            self.adapter.validate_response(resp_multi_msg)
 
         # 4. Empty list
         with self.assertRaises(InvalidAgentResponse):

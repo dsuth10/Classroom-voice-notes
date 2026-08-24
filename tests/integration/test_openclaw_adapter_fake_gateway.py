@@ -35,7 +35,7 @@ class FakeGatewayHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
         resp = {
-            "output": f"Echo: {prompt}"
+            "output": "ACTION_COMPLETED: receipt_type=openclaw_result; receipt_id=FAKE_GATEWAY_OK"
         }
         self.wfile.write(json.dumps(resp).encode('utf-8'))
 
@@ -77,10 +77,12 @@ class TestOpenClawAdapterFakeGateway(unittest.TestCase):
             "max_output_tokens": 200
         }
         res = self.adapter.execute(req, 5)
-        self.assertEqual(res["output"], "Echo: Hello Fake Gateway")
+        self.assertIn("FAKE_GATEWAY_OK", res["output"])
 
         validated = self.adapter.validate_response(res)
-        self.assertEqual(validated["result_summary"], "Echo: Hello Fake Gateway")
+        self.assertEqual(
+            validated["result_reference"], "openclaw_result:FAKE_GATEWAY_OK"
+        )
 
     def test_fake_gateway_read_timeout(self):
         req = {

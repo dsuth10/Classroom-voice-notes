@@ -405,16 +405,16 @@ class MainWindow(QMainWindow):
         # Outbox stats display label
         try:
             from app.destinations.external_outbox import ExternalOutbox
-            stats = ExternalOutbox().get_stats()
+            stats = ExternalOutbox().get_lifecycle_stats()
         except Exception:
-            stats = {"pending": 0, "sent": 0, "dead_letter": 0}
+            stats = {"submitted": 0, "claimed": 0, "completed": 0, "blocked": 0}
             
-        pending = stats.get("pending", 0) + stats.get("sending", 0)
-        sent = stats.get("sent", 0) + stats.get("completed", 0) + stats.get("processing", 0)
-        stuck = stats.get("dead_letter", 0)
-
         self.outbox_status_label = QLabel(
-            f"Local Outbox: {pending} pending, {sent} sent, {stuck} stuck"
+            "Outbound: "
+            f"{stats.get('submitted', 0)} submitted, "
+            f"{stats.get('claimed', 0)} claimed, "
+            f"{stats.get('completed', 0)} completed, "
+            f"{stats.get('blocked', 0)} blocked"
         )
         self.outbox_status_label.setStyleSheet("color: #555; font-size: 11px;")
         
@@ -431,7 +431,7 @@ class MainWindow(QMainWindow):
         self.retry_outbox_btn.clicked.connect(self.retry_outbox_now)
         retry_layout.addWidget(self.retry_outbox_btn)
 
-        self.view_outbox_btn = QPushButton("View Outbox")
+        self.view_outbox_btn = QPushButton("View Lifecycle")
         self.view_outbox_btn.clicked.connect(self.view_outbox)
         retry_layout.addWidget(self.view_outbox_btn)
 
@@ -689,12 +689,13 @@ class MainWindow(QMainWindow):
         """Refreshes the outbox stats display label from the database state."""
         try:
             from app.destinations.external_outbox import ExternalOutbox
-            stats = ExternalOutbox().get_stats()
-            pending = stats.get("pending", 0) + stats.get("sending", 0)
-            sent = stats.get("sent", 0) + stats.get("completed", 0) + stats.get("processing", 0)
-            stuck = stats.get("dead_letter", 0)
+            stats = ExternalOutbox().get_lifecycle_stats()
             self.outbox_status_label.setText(
-                f"Local Outbox: {pending} pending, {sent} sent, {stuck} stuck"
+                "Outbound: "
+                f"{stats.get('submitted', 0)} submitted, "
+                f"{stats.get('claimed', 0)} claimed, "
+                f"{stats.get('completed', 0)} completed, "
+                f"{stats.get('blocked', 0)} blocked"
             )
         except Exception:
             pass

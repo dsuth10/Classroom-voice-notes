@@ -39,7 +39,11 @@ class TestBrokerWorkerRouting(unittest.TestCase):
         mock_adapter = MagicMock()
         mock_adapter.convert_task.return_value = {"input": "test"}
         mock_adapter.execute.return_value = {"output": "success result"}
-        mock_adapter.validate_response.return_value = {"result_summary": "success result"}
+        mock_adapter.validate_response.return_value = {
+            "status": "completed",
+            "result_reference": "openclaw_result:SUCCESS_RESULT",
+            "reason_code": None,
+        }
 
         with patch("app.worker.task_adapter.AdapterRegistry.get_adapter", return_value=mock_adapter):
             with patch.object(worker, "complete_task") as mock_complete:
@@ -47,7 +51,9 @@ class TestBrokerWorkerRouting(unittest.TestCase):
 
                 mock_adapter.validate_task.assert_called_once()
                 mock_adapter.execute.assert_called_once()
-                mock_complete.assert_called_once_with("CVN-1234", "success result")
+                mock_complete.assert_called_once_with(
+                    "CVN-1234", "openclaw_result:SUCCESS_RESULT"
+                )
 
     @patch("app.worker.broker_worker.BrokerWorker._resolve_secret")
     def test_worker_routing_hermes_rejected(self, mock_resolve):

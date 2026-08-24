@@ -11,9 +11,21 @@ def test_pr8_edge_functions_exist() -> None:
     assert "timingSafeEqual" in auth_content
     assert "authenticateWorker" in auth_content
 
-    funcs = ["cvn-claim-outbound-item", "cvn-complete-outbound-item", "cvn-fail-outbound-item", "cvn-outbound-status"]
+    funcs = ["cvn-claim-outbound-item", "cvn-complete-outbound-item", "cvn-fail-outbound-item"]
     for func in funcs:
         edge_file = Path(f"supabase/functions/{func}/index.ts")
         assert edge_file.exists(), f"{func} index.ts missing"
         content = edge_file.read_text(encoding="utf-8")
         assert "authenticateWorker" in content
+
+    status_content = Path(
+        "supabase/functions/cvn-outbound-status/index.ts"
+    ).read_text(encoding="utf-8")
+    assert "authenticateClient" in status_content
+    assert "p_source_device_id: authorisedSourceDeviceId" in status_content
+    assert "Lifecycle-only allowlist" in status_content
+    assert "result_reference: safeResultReference" in status_content
+    assert "blocked_reason:" in status_content
+    assert "item_kind: row.item_kind" not in status_content
+    assert "safeResultReference" in status_content
+    assert "authenticateWorker" not in status_content

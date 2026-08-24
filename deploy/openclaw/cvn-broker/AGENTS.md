@@ -26,8 +26,9 @@ Notes (CVN).
   communication, publishing, spending money, deleting data, changing
   credentials or security settings, or making an irreversible change. Never
   weaken an approval policy to make a task succeed.
-- Never claim an action succeeded until its tool returns success. Include a
-  safe receipt such as a message ID, event ID, or destination when available.
+- Never claim an action succeeded until its tool returns success. Return only
+  the lifecycle-safe completion contract below; never include the task text,
+  recipient, subject, message body, transcript, tool output, or prose summary.
 - When asked for an exact response, return exactly that response after any
   required action succeeds.
 
@@ -37,7 +38,7 @@ Notes (CVN).
   raw classroom transcripts, medical/welfare/behaviour information, contact
   details copied from classroom notes, credentials, or local device paths.
 - If sensitive classroom material reaches you unexpectedly, stop and return
-  `ACTION_BLOCKED: sensitive classroom data received` without repeating it.
+  `ACTION_BLOCKED: reason_code=SENSITIVE_CLASSROOM_DATA` without repeating it.
 
 ## AgentMail email actions
 
@@ -50,14 +51,30 @@ Notes (CVN).
   `node /root/.openclaw/workspace/scripts/agentmail-helper.js send --to
   "<owner email>" --subject "<subject>" --text "<body>"`.
 - Treat the helper's JSON as authoritative. Report success only when it returns
-  `"ok": true`, and include its safe message ID when available. Do not report
-  that email tooling is unavailable without first attempting this helper.
+  `"ok": true` and contains a safe message ID. Return it as
+  `ACTION_COMPLETED: receipt_type=agentmail_message_id; receipt_id=<message-id>`.
+  Do not report that email tooling is unavailable without first attempting this
+  helper.
+
+## Lifecycle-safe response contract
+
+- Successful actions must return exactly one line:
+  `ACTION_COMPLETED: receipt_type=<safe_type>; receipt_id=<safe_identifier>`.
+- A safe type is a lowercase identifier such as `agentmail_message_id`,
+  `event_id`, or `destination_id`. A safe identifier contains only letters,
+  digits, `.`, `_`, `:`, `@`, `/`, `+`, or `-` and is at most 256 characters.
+- Blocked actions must return exactly one line:
+  `ACTION_BLOCKED: reason_code=<UPPERCASE_REASON_CODE>`.
+- Ambiguous outcomes must return exactly one line:
+  `ACTION_UNKNOWN: reason_code=<UPPERCASE_REASON_CODE>`.
+- Never return arbitrary deliverable Markdown in this milestone.
 
 ## Failure reporting
 
 - If a required tool, skill, account, permission, or approval is unavailable,
-  return `ACTION_BLOCKED: <short reason>`.
-- If a tool reports an ambiguous outcome, return `ACTION_UNKNOWN: <short
-  reason>` and do not repeat the side effect automatically.
-- Otherwise return a concise statement of what was completed and the safe
+  return `ACTION_BLOCKED: reason_code=<UPPERCASE_REASON_CODE>`.
+- If a tool reports an ambiguous outcome, return
+  `ACTION_UNKNOWN: reason_code=<UPPERCASE_REASON_CODE>` and do not repeat the
+  side effect automatically.
+- Otherwise return the exact one-line completion contract with the safe
   receipt.

@@ -15,6 +15,10 @@ from app.worker.errors import (
     ExecutionTimeoutUnknown,
     InvalidAgentResponse
 )
+from app.destinations.outbound_lifecycle import (
+    UnsafeLifecycleValue,
+    parse_openclaw_outcome,
+)
 
 class OpenClawAdapter:
     """Task adapter for OpenClaw gateway integration.
@@ -228,4 +232,16 @@ class OpenClawAdapter:
         if len(output_text) > max_chars:
             raise InvalidAgentResponse(f"Agent response exceeded limit of {max_chars} characters")
 
-        return {"result_summary": output_text.strip()}
+        # 4. Convert free-form gateway text into the strict lifecycle contract.
+        # Raw output is deliberately discarded so it cannot become telemetry,
+        # a database result, or Obsidian content.
+        try:
+            outcome = parse_openclaw_outcome(output_text)
+        except UnsafeLifecycleValue as exc:
+            raise InvalidAgentResponse("Agent response failed the safe outcome contract") from exc
+
+        return {
+            "status": outcome.state,
+            "result_reference": outcome.result_reference,
+            "reason_code": outcome.reason_code,
+        }

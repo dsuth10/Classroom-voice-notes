@@ -73,6 +73,48 @@ def test_mark_failed_exponential_backoff(outbox: ExternalOutbox) -> None:
     assert stats["dead_letter"] == 1
     assert stats["pending"] == 0
 
+
+def test_mark_failed_never_writes_sensitive_error_to_audit(
+    outbox: ExternalOutbox,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit_messages: list[str] = []
+
+    def capture_audit(_event: str, _component: str, message: str) -> None:
+        audit_messages.append(message)
+
+    monkeypatch.setattr(
+        "app.destinations.external_outbox.log_audit_event",
+        capture_audit,
+    )
+    local_id = outbox.enqueue(
+        "CVN-PRIVATE",
+        "http://test.url",
+        "{}",
+        "hash",
+        "idem-private",
+        "nonce-private",
+        schema_version="cvn.outbound_item.v2",
+    )
+    outbox.mark_sending(local_id)
+    outbox.mark_failed(
+        local_id,
+        "Email to teacher@example.com included a private message body",
+        max_attempts=1,
+    )
+
+    audit_text = "\n".join(audit_messages)
+    assert "teacher@example.com" not in audit_text
+    assert "private message body" not in audit_text
+    with sqlite3.connect(outbox.db_path) as conn:
+        stored_error = conn.execute(
+            "SELECT last_error FROM outbox WHERE local_id = ?", (local_id,)
+        ).fetchone()[0]
+    assert stored_error == "LOCAL_DELIVERY_FAILED"
+    lifecycle = outbox.get_lifecycle_tasks()[0]
+    assert lifecycle["lifecycle_state"] == "blocked"
+    assert lifecycle["blocked_reason"] == "LOCAL_DELIVERY_EXHAUSTED"
+
 def test_mark_duplicate_409(outbox: ExternalOutbox) -> None:
     local_id = outbox.enqueue("CVN-4", "http://test.url", "{}", "hash", "idem4", "nonce4", schema_version="cvn.outbound_item.v2")
     outbox.mark_duplicate(local_id, "duplicate_idempotency_key")
@@ -85,7 +127,9 @@ def test_mark_duplicate_409(outbox: ExternalOutbox) -> None:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM outbox WHERE local_id = ?", (local_id,)).fetchone()
         assert row["status"] == "conflict"
-        assert "Submission conflict" in row["last_error"]
+        assert row["last_error"] == "SUBMISSION_CONFLICT"
+        assert row["lifecycle_state"] == "blocked"
+        assert row["blocked_reason"] == "SUBMISSION_CONFLICT"
         assert row["next_retry_at"] is None
 
 
